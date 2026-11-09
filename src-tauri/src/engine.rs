@@ -265,18 +265,22 @@ impl Engine {
                 let (tcp, peer) = match listener.accept().await {
                     Ok(accepted) => accepted,
                     Err(err) => {
-                        engine.note(format!("Accept failed: {err}"));
+                        engine.diagnostic(format!("Accept failed: {err}"));
                         break;
                     }
                 };
+                engine.diagnostic(format!("Incoming TCP connection from {peer}."));
                 let local = tcp.local_addr().ok().and_then(media_ipv4);
                 let acceptor = acceptor.clone();
                 let engine = engine.clone();
                 tokio::spawn(async move {
                     let tls = match acceptor.accept(tcp).await {
-                        Ok(stream) => stream,
+                        Ok(stream) => {
+                            engine.diagnostic(format!("TLS handshake completed with {peer}."));
+                            stream
+                        }
                         Err(err) => {
-                            engine.note(format!("{peer} stopped during TLS ({err})."));
+                            engine.diagnostic(format!("TLS handshake failed with {peer}: {err}."));
                             return;
                         }
                     };
@@ -558,13 +562,14 @@ impl Engine {
         {
             Ok(socket) => socket,
             Err(err) => {
-                self.note(format!("{peer} did not complete the socket ({err})."));
+                self.diagnostic(format!("WebSocket handshake failed with {peer}: {err}."));
                 return;
             }
         };
         if path.contains("mdns") {
             self.handle_discovery(websocket, peer).await;
         } else {
+            self.diagnostic(format!("Control WebSocket established with {peer}."));
             self.handle_control(websocket, peer, local).await;
         }
     }
@@ -579,9 +584,11 @@ impl Engine {
     {
         let (mut sink, mut stream) = websocket.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+        let writer_engine = self.clone();
         let writer = tokio::spawn(async move {
             while let Some(message) = rx.recv().await {
-                if sink.send(message).await.is_err() {
+                if let Err(err) = sink.send(message).await {
+                    writer_engine.diagnostic(format!("WebSocket write failed: {err}."));
                     break;
                 }
             }
@@ -596,27 +603,51 @@ impl Engine {
         }
         let exchange_sent = Arc::new(AtomicBool::new(false));
         let mut phone_id: Option<String> = None;
+        let mut malformed_message_logged = false;
 
         while let Some(incoming) = stream.next().await {
             let message = match incoming {
                 Ok(message) => message,
-                Err(_) => break,
+                Err(err) => {
+                    self.diagnostic(format!("WebSocket read failed from {peer}: {err}."));
+                    break;
+                }
             };
             match message {
                 Message::Text(text) => {
-                    let step =
-                        self.on_control_text(&text, &tx, session, &exchange_sent, &mut phone_id);
+                    let step = self.on_control_text(
+                        &text,
+                        &tx,
+                        session,
+                        &exchange_sent,
+                        &mut phone_id,
+                        peer,
+                        &mut malformed_message_logged,
+                    );
                     if matches!(step, Step::Drop) {
                         break;
                     }
                 }
                 Message::Binary(bytes) => {
                     if let Ok(text) = std::str::from_utf8(&bytes) {
-                        let step =
-                            self.on_control_text(text, &tx, session, &exchange_sent, &mut phone_id);
+                        let step = self.on_control_text(
+                            text,
+                            &tx,
+                            session,
+                            &exchange_sent,
+                            &mut phone_id,
+                            peer,
+                            &mut malformed_message_logged,
+                        );
                         if matches!(step, Step::Drop) {
                             break;
                         }
+                    } else if !malformed_message_logged {
+                        malformed_message_logged = true;
+                        self.diagnostic(format!(
+                            "Ignored a non-UTF-8 pairing frame from {peer} ({} bytes).",
+                            bytes.len()
+                        ));
                     }
                 }
                 Message::Ping(payload) => {
@@ -627,6 +658,11 @@ impl Engine {
             }
         }
 
+        if phone_id.is_none() {
+            self.diagnostic(format!(
+                "Connection from {peer} ended before a phone hello; pairing did not complete."
+            ));
+        }
         if let Some(real_id) = &phone_id {
             let mut guard = self.lock();
             if guard.senders.get(real_id).map(|(id, _)| *id) == Some(session) {
@@ -657,7 +693,6 @@ impl Engine {
         }
         drop(tx);
         let _ = writer.await;
-        let _ = peer;
     }
 
     fn on_control_text(
@@ -667,6 +702,8 @@ impl Engine {
         session: u64,
         exchange_sent: &Arc<AtomicBool>,
         phone_id: &mut Option<String>,
+        peer: SocketAddr,
+        malformed_message_logged: &mut bool,
     ) -> Step {
         let owned;
         let text = if text.contains("\"mediaData\"") {
@@ -678,9 +715,10 @@ impl Engine {
         let message: Value = match serde_json::from_str(&protocol::quote_wide_integers(text)) {
             Ok(value) => value,
             Err(_) => {
-                if text.len() > 2000 {
-                    self.note(format!(
-                        "A phone message of {} bytes could not be read.",
+                if !*malformed_message_logged {
+                    *malformed_message_logged = true;
+                    self.diagnostic(format!(
+                        "Could not parse a pairing message from {peer} ({} bytes).",
                         text.len()
                     ));
                 }
@@ -773,7 +811,7 @@ impl Engine {
             .trim()
             .to_string();
         if real_id.is_empty() {
-            self.note("A phone hello had no stable id.");
+            self.diagnostic("Phone hello did not include a stable device ID.");
             return Step::Drop;
         }
         let token = data["token"].as_str().unwrap_or("");
@@ -783,7 +821,7 @@ impl Engine {
             .iter()
             .any(|phone| phone.real_id == real_id);
         if !self.token_matches(token) && !known {
-            self.note("Rejected a connection with an unknown code.");
+            self.diagnostic("Rejected a connection with an unknown or expired pairing code.");
             return Step::Drop;
         }
         let name = device["deviceName"].as_str().unwrap_or("Phone").trim();
@@ -921,6 +959,7 @@ impl Engine {
             (text, name, our_key, phone_key, is_new)
         };
         if tx.send(Message::Text(text.into())).is_err() {
+            self.diagnostic("Could not send the pairing exchange message; the connection closed.");
             return;
         }
         self.remember_phone(real_id, &name, &our_key, phone_key);
@@ -978,7 +1017,7 @@ impl Engine {
     ) where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        self.note(format!("Discovery connection from {peer}."));
+        self.diagnostic(format!("Discovery connection from {peer}."));
         while let Some(incoming) = websocket.next().await {
             let message = match incoming {
                 Ok(message) => message,
@@ -2280,6 +2319,11 @@ impl Engine {
         while self.lock().logs.len() > 80 {
             self.lock().logs.pop_front();
         }
+    }
+
+    fn diagnostic(&self, line: impl AsRef<str>) {
+        self.note(line);
+        self.publish();
     }
 
     fn fail(&self, message: String) {
