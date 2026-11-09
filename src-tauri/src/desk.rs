@@ -6,7 +6,7 @@
 
 use base64::Engine;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -114,7 +114,10 @@ pub struct PullJob {
 }
 
 pub enum Effect {
-    Send { service: i64, data: Value },
+    Send {
+        service: i64,
+        data: Value,
+    },
     Note(String),
     Publish,
     Banner {
@@ -139,13 +142,22 @@ pub enum Effect {
         label: i64,
         mid: String,
     },
-    Closed { session_id: String },
+    Closed {
+        session_id: String,
+    },
     /// Open or close OBS. Only the phone-camera button turns this on.
-    Obs { on: bool },
-    CloseLater { session_id: String, secs: u64 },
+    Obs {
+        on: bool,
+    },
+    CloseLater {
+        session_id: String,
+        secs: u64,
+    },
     Status,
     /// The phone has 20 seconds to answer a start. The engine clears a start that never does.
-    WatchStart { token: u64 },
+    WatchStart {
+        token: u64,
+    },
     /// A service 168 reply named the phone's folder server.
     ShareReady,
 }
@@ -196,7 +208,10 @@ pub struct Desk {
 
 impl Desk {
     pub fn new() -> Self {
-        let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(1);
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(1);
         Self {
             clipboard_ready: false,
             cross_active: false,
@@ -240,14 +255,21 @@ impl Desk {
         self.opened_at = None;
         self.ice_shape_noted = false;
         self.ice_seen_noted = false;
-        let stop_obs = self.webcam_armed || self.sessions.values().any(|session| session.pkg == "webcam");
+        let stop_obs = self.webcam_armed
+            || self
+                .sessions
+                .values()
+                .any(|session| session.pkg == "webcam");
         self.webcam_armed = false;
         self.caps_sent.clear();
         self.phone_share = None;
         let ids: Vec<String> = self.sessions.keys().cloned().collect();
         self.sessions.clear();
         self.visible = None;
-        let mut effects: Vec<Effect> = ids.into_iter().map(|session_id| Effect::Closed { session_id }).collect();
+        let mut effects: Vec<Effect> = ids
+            .into_iter()
+            .map(|session_id| Effect::Closed { session_id })
+            .collect();
         if stop_obs {
             effects.push(Effect::Obs { on: false });
         }
@@ -317,7 +339,10 @@ impl Desk {
     }
 
     pub fn session_pkg(&self, session_id: &str) -> String {
-        self.sessions.get(session_id).map(|session| session.pkg.clone()).unwrap_or_default()
+        self.sessions
+            .get(session_id)
+            .map(|session| session.pkg.clone())
+            .unwrap_or_default()
     }
 
     pub fn visible(&self) -> Option<SessionView> {
@@ -344,11 +369,15 @@ impl Desk {
     }
 
     pub fn has_sessions(&self) -> bool {
-        self.sessions.values().any(|session| session.pkg != "webcam")
+        self.sessions
+            .values()
+            .any(|session| session.pkg != "webcam")
     }
 
     pub fn webcam_live(&self) -> bool {
-        self.sessions.values().any(|session| session.pkg == "webcam")
+        self.sessions
+            .values()
+            .any(|session| session.pkg == "webcam")
     }
 
     /// Heartbeats start at the request. The phone drops the camera after 30 seconds of silence.
@@ -382,7 +411,11 @@ impl Desk {
         if text.chars().count() > 2000 {
             return Err("Keep the reply under 2000 characters.".into());
         }
-        let notice = self.notifications.iter().find(|(id, _)| id == key).map(|(_, notice)| notice.clone());
+        let notice = self
+            .notifications
+            .iter()
+            .find(|(id, _)| id == key)
+            .map(|(_, notice)| notice.clone());
         let Some(notice) = notice else {
             return Err("That notification is already gone.".into());
         };
@@ -405,7 +438,11 @@ impl Desk {
     }
 
     pub fn act(&mut self, key: &str, action_id: i64) -> Result<Vec<Effect>, String> {
-        let notice = self.notifications.iter().find(|(id, _)| id == key).map(|(_, notice)| notice.clone());
+        let notice = self
+            .notifications
+            .iter()
+            .find(|(id, _)| id == key)
+            .map(|(_, notice)| notice.clone());
         let Some(notice) = notice else {
             return Err("That notification is already gone.".into());
         };
@@ -433,7 +470,11 @@ impl Desk {
     }
 
     pub fn open_notice(&mut self, key: &str) -> Result<Vec<Effect>, String> {
-        let notice = self.notifications.iter().find(|(id, _)| id == key).map(|(_, notice)| notice.clone());
+        let notice = self
+            .notifications
+            .iter()
+            .find(|(id, _)| id == key)
+            .map(|(_, notice)| notice.clone());
         let Some(notice) = notice else {
             return Err("That notification is already gone.".into());
         };
@@ -475,7 +516,10 @@ impl Desk {
             .map(|(id, _)| id.clone())
         {
             self.visible = Some(id);
-            return Ok(vec![Effect::Note("The phone screen is already open.".into()), Effect::Publish]);
+            return Ok(vec![
+                Effect::Note("The phone screen is already open.".into()),
+                Effect::Publish,
+            ]);
         }
         let mut effects = match self.gate_start() {
             StartGate::Wait(effects) => return Ok(effects),
@@ -499,8 +543,15 @@ impl Desk {
     }
 
     pub fn start_desktop(&mut self) -> Result<Vec<Effect>, String> {
-        if self.sessions.values().any(|session| session.pkg == "desktop" && !session.quiet) {
-            return Ok(vec![Effect::Note("The phone desktop is already open.".into()), Effect::Publish]);
+        if self
+            .sessions
+            .values()
+            .any(|session| session.pkg == "desktop" && !session.quiet)
+        {
+            return Ok(vec![
+                Effect::Note("The phone desktop is already open.".into()),
+                Effect::Publish,
+            ]);
         }
         let mut effects = match self.gate_start() {
             StartGate::Wait(effects) => return Ok(effects),
@@ -579,7 +630,10 @@ impl Desk {
             .map(|app| app.name.clone())
             .unwrap_or_else(|| pkg.to_string());
         effects.extend([
-            Effect::Send { service: 15, data: stream_start(pkg, cmp, user_id, 0, self.instance_id) },
+            Effect::Send {
+                service: 15,
+                data: stream_start(pkg, cmp, user_id, 0, self.instance_id),
+            },
             Effect::Note(format!("Opening {name}.")),
             Effect::Publish,
             Effect::WatchStart { token },
@@ -598,9 +652,15 @@ impl Desk {
         self.webcam_armed = true;
         Ok(vec![
             // No isReply key. The phone treats a present key as its own reply, even when the value is 0.
-            Effect::Send { service: 3, data: webcam_request() },
+            Effect::Send {
+                service: 3,
+                data: webcam_request(),
+            },
             Effect::Note("Asking the phone to share its camera.".into()),
-            Effect::Note("Other apps can choose OBS Virtual Camera while this camera is on.".into()),
+            Effect::Note(
+                "Other apps can use the phone camera when a virtual-camera backend is available."
+                    .into(),
+            ),
             Effect::Obs { on: true },
             Effect::Publish,
         ])
@@ -610,11 +670,17 @@ impl Desk {
         if !self.webcam_live() {
             return Err("The phone camera is not on.".into());
         }
-        Ok(vec![Effect::Send { service: 3, data: json!({ "ver": "1", "cmd": 4 }) }])
+        Ok(vec![Effect::Send {
+            service: 3,
+            data: json!({ "ver": "1", "cmd": 4 }),
+        }])
     }
 
     pub fn refresh_apps(&self) -> Vec<Effect> {
-        vec![Effect::Send { service: 17, data: json!({ "ver": "1", "cmd": 2 }) }]
+        vec![Effect::Send {
+            service: 17,
+            data: json!({ "ver": "1", "cmd": 2 }),
+        }]
     }
 
     pub fn stop_pkg(&mut self, pkg: &str) -> Vec<Effect> {
@@ -633,7 +699,10 @@ impl Desk {
         if pkg == "webcam" && self.webcam_armed {
             self.webcam_armed = false;
             return vec![
-                Effect::Send { service: 3, data: json!({ "ver": "1", "cmd": 2 }) },
+                Effect::Send {
+                    service: 3,
+                    data: json!({ "ver": "1", "cmd": 2 }),
+                },
                 Effect::Note("Closed the phone camera.".into()),
                 Effect::Obs { on: false },
                 Effect::Publish,
@@ -643,7 +712,11 @@ impl Desk {
     }
 
     pub fn stop_session(&mut self, session_id: &str) -> Vec<Effect> {
-        let id = if session_id.is_empty() { self.visible.clone().unwrap_or_default() } else { session_id.to_string() };
+        let id = if session_id.is_empty() {
+            self.visible.clone().unwrap_or_default()
+        } else {
+            session_id.to_string()
+        };
         if id.is_empty() || !self.sessions.contains_key(&id) {
             if self.starting {
                 return self.cancel_open();
@@ -651,14 +724,21 @@ impl Desk {
             return Vec::new();
         }
         let quiet = self.sessions.get(&id).is_some_and(|session| session.quiet);
-        let webcam = self.sessions.get(&id).is_some_and(|session| session.pkg == "webcam");
+        let webcam = self
+            .sessions
+            .get(&id)
+            .is_some_and(|session| session.pkg == "webcam");
         if webcam {
             self.webcam_armed = false;
         }
         self.suppress_close.insert(id.clone(), true);
         self.sessions.remove(&id);
         if self.visible.as_deref() == Some(&id) {
-            self.visible = self.sessions.iter().find(|(_, session)| session.pkg == "mirror").map(|(key, _)| key.clone());
+            self.visible = self
+                .sessions
+                .iter()
+                .find(|(_, session)| session.pkg == "mirror")
+                .map(|(key, _)| key.clone());
         }
         self.starting = false;
         let stop = if webcam {
@@ -667,12 +747,19 @@ impl Desk {
             json!({ "ver": "1", "cmd": 7, "data": { "sessionId": id.clone(), "error": 0 } })
         };
         let mut effects = vec![
-            Effect::Send { service: if webcam { 3 } else { 15 }, data: stop },
+            Effect::Send {
+                service: if webcam { 3 } else { 15 },
+                data: stop,
+            },
             Effect::Closed { session_id: id },
             Effect::Publish,
         ];
         if !quiet {
-            effects.push(Effect::Note(if webcam { "Closed the phone camera.".into() } else { "Closed the phone screen.".into() }));
+            effects.push(Effect::Note(if webcam {
+                "Closed the phone camera.".into()
+            } else {
+                "Closed the phone screen.".into()
+            }));
         }
         if webcam {
             effects.push(Effect::Obs { on: false });
@@ -688,7 +775,8 @@ impl Desk {
             return Err("The phone closed that screen.".into());
         };
         let user_id = session.user_id;
-        let web = serde_json::to_string(&json!({ "type": "answer", "sdp": sdp })).map_err(|_| "Could not write the screen answer.")?;
+        let web = serde_json::to_string(&json!({ "type": "answer", "sdp": sdp }))
+            .map_err(|_| "Could not write the screen answer.")?;
         let quiet = session.quiet;
         let webcam = session.pkg == "webcam";
         self.starting = false;
@@ -702,7 +790,10 @@ impl Desk {
                         "data": { "sessionId": wire_session_id(session_id), "type": "answer", "webRTCData": web }
                     }),
                 },
-                Effect::Send { service: 3, data: json!({ "ver": "1", "cmd": 13 }) },
+                Effect::Send {
+                    service: 3,
+                    data: json!({ "ver": "1", "cmd": 13 }),
+                },
                 Effect::Note("Answered the phone camera.".into()),
             ]);
         }
@@ -724,7 +815,10 @@ impl Desk {
                     }
                 }),
             },
-            Effect::Send { service: 15, data: json!({ "ver": "1", "cmd": 9 }) },
+            Effect::Send {
+                service: 15,
+                data: json!({ "ver": "1", "cmd": 9 }),
+            },
         ];
         if !quiet {
             effects.push(Effect::Note(answer_shape(sdp)));
@@ -796,8 +890,14 @@ impl Desk {
         let cid = self.cross_cid;
         self.cross_active = false;
         vec![
-            Effect::Send { service: 26, data: json!({ "ver": "1", "cmd": 4, "show": false }) },
-            Effect::Send { service: 26, data: json!({ "ver": "1", "cmd": 5, "cid": cid }) },
+            Effect::Send {
+                service: 26,
+                data: json!({ "ver": "1", "cmd": 4, "show": false }),
+            },
+            Effect::Send {
+                service: 26,
+                data: json!({ "ver": "1", "cmd": 5, "cid": cid }),
+            },
             Effect::Status,
             Effect::Note("Stopped controlling the phone.".into()),
             Effect::Publish,
@@ -808,7 +908,10 @@ impl Desk {
         if !self.cross_active {
             return None;
         }
-        Some(Effect::Send { service: 26, data: json!({ "ver": "1", "cmd": 4, "show": show }) })
+        Some(Effect::Send {
+            service: 26,
+            data: json!({ "ver": "1", "cmd": 4, "show": show }),
+        })
     }
 
     pub fn input(&mut self, display_id: i64, data: Value) -> Vec<Effect> {
@@ -890,20 +993,28 @@ impl Desk {
     }
 
     fn open_is_fresh(&self, pkg: &str) -> bool {
-        self.opened_at.as_ref().is_some_and(|(name, at)| name == pkg && at.elapsed() < Duration::from_secs(20))
+        self.opened_at
+            .as_ref()
+            .is_some_and(|(name, at)| name == pkg && at.elapsed() < Duration::from_secs(20))
     }
 
     fn cancel_open(&mut self) -> Vec<Effect> {
         self.starting = false;
         vec![
-            Effect::Send { service: 1, data: json!({ "ver": "1.0.0", "cmd": 5 }) },
+            Effect::Send {
+                service: 1,
+                data: json!({ "ver": "1.0.0", "cmd": 5 }),
+            },
             Effect::Note("Stopped the screen the phone was opening.".into()),
             Effect::Publish,
         ]
     }
 
     fn webcam_id(&self) -> Option<String> {
-        self.sessions.iter().find(|(_, session)| session.pkg == "webcam").map(|(id, _)| id.clone())
+        self.sessions
+            .iter()
+            .find(|(_, session)| session.pkg == "webcam")
+            .map(|(id, _)| id.clone())
     }
 
     fn on_webcam(&mut self, raw: &Value) -> Vec<Effect> {
@@ -918,7 +1029,10 @@ impl Desk {
                 Some(0) => {
                     self.webcam_armed = true;
                     vec![
-                        Effect::Send { service: 3, data: webcam_accept() },
+                        Effect::Send {
+                            service: 3,
+                            data: webcam_accept(),
+                        },
                         Effect::Note("The phone asked to share its camera.".into()),
                         Effect::Publish,
                     ]
@@ -926,7 +1040,10 @@ impl Desk {
                 Some(1) => {
                     self.webcam_armed = true;
                     vec![
-                        Effect::Send { service: 3, data: webcam_go() },
+                        Effect::Send {
+                            service: 3,
+                            data: webcam_go(),
+                        },
                         Effect::Note("The phone accepted the camera.".into()),
                         Effect::Publish,
                     ]
@@ -948,10 +1065,14 @@ impl Desk {
 
     fn webcam_offer(&mut self, nested: &Value) -> Vec<Effect> {
         let Some(value) = webrtc_value(nested) else {
-            return vec![Effect::Note("The phone camera description could not be read.".into())];
+            return vec![Effect::Note(
+                "The phone camera description could not be read.".into(),
+            )];
         };
         let Some(sdp) = sdp_of_value(&value, "offer") else {
-            return vec![Effect::Note("The phone camera description could not be read.".into())];
+            return vec![Effect::Note(
+                "The phone camera description could not be read.".into(),
+            )];
         };
         // Leave the offer intact. The camera window plays it. Filtering it to
         // H.264 makes that window reject the video line.
@@ -973,26 +1094,48 @@ impl Desk {
         );
         self.starting = false;
         vec![
-            Effect::Offer { session_id, sdp, quiet: false, pkg: "webcam".into() },
+            Effect::Offer {
+                session_id,
+                sdp,
+                quiet: false,
+                pkg: "webcam".into(),
+            },
             Effect::Note("The phone offered its camera.".into()),
             Effect::Publish,
         ]
     }
 
     fn webcam_ice(&mut self, nested: &Value) -> Vec<Effect> {
-        let Some(session_id) = self.webcam_id() else { return Vec::new() };
-        let Some(inner) = webrtc_value(nested).or_else(|| ice_value(nested)) else { return Vec::new() };
-        let Some(candidate) = inner.get("candidate").and_then(Value::as_str).map(str::trim).filter(|text| text.contains("candidate:")) else {
+        let Some(session_id) = self.webcam_id() else {
             return Vec::new();
         };
-        let candidate = candidate.strip_prefix("a=").unwrap_or(candidate).to_string();
+        let Some(inner) = webrtc_value(nested).or_else(|| ice_value(nested)) else {
+            return Vec::new();
+        };
+        let Some(candidate) = inner
+            .get("candidate")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| text.contains("candidate:"))
+        else {
+            return Vec::new();
+        };
+        let candidate = candidate
+            .strip_prefix("a=")
+            .unwrap_or(candidate)
+            .to_string();
         let label = json_i64(inner.get("label").or_else(|| inner.get("sdpMLineIndex")));
         let mid = match inner.get("id").or_else(|| inner.get("mid")) {
             Some(Value::String(text)) if !text.is_empty() => text.clone(),
             Some(Value::Number(number)) => number.to_string(),
             _ => "0".to_string(),
         };
-        vec![Effect::Ice { session_id, candidate, label, mid }]
+        vec![Effect::Ice {
+            session_id,
+            candidate,
+            label,
+            mid,
+        }]
     }
 
     fn webcam_gone(&mut self) -> Vec<Effect> {
@@ -1001,7 +1144,11 @@ impl Desk {
             return vec![Effect::Obs { on: false }, Effect::Publish];
         };
         self.sessions.remove(&session_id);
-        vec![Effect::Closed { session_id }, Effect::Obs { on: false }, Effect::Publish]
+        vec![
+            Effect::Closed { session_id },
+            Effect::Obs { on: false },
+            Effect::Publish,
+        ]
     }
 
     fn on_view(&mut self, data: &Value) -> Vec<Effect> {
@@ -1040,11 +1187,20 @@ impl Desk {
     }
 
     fn on_fex(&mut self, data: &Value) -> Vec<Effect> {
-        let Some(port) = port_of(data) else { return Vec::new() };
-        let Some(fingerprint) = text_field(data, "fingerprint") else { return Vec::new() };
+        let Some(port) = port_of(data) else {
+            return Vec::new();
+        };
+        let Some(fingerprint) = text_field(data, "fingerprint") else {
+            return Vec::new();
+        };
         let token = text_field(data, "token").unwrap_or_default();
         vec![
-            Effect::Pull(PullJob { port, fingerprint, token, icons: false }),
+            Effect::Pull(PullJob {
+                port,
+                fingerprint,
+                token,
+                icons: false,
+            }),
             Effect::Note("Receiving a file from the phone.".into()),
         ]
     }
@@ -1066,7 +1222,9 @@ impl Desk {
         let body = data.get("data").cloned().unwrap_or(Value::Null);
         let app = text_field(&body, "apk_name").unwrap_or_else(|| "Phone".into());
         let pkg = text_field(&body, "package_name").unwrap_or_default();
-        let title = text_field(&body, "title").filter(|text| !text.is_empty()).unwrap_or_else(|| app.clone());
+        let title = text_field(&body, "title")
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| app.clone());
         let content = text_field(&body, "content").unwrap_or_default();
         let mut actions = Vec::new();
         let mut can_reply = false;
@@ -1076,21 +1234,34 @@ impl Desk {
                 if name.is_empty() {
                     continue;
                 }
-                let id = action.get("action_id").and_then(Value::as_i64).unwrap_or(index as i64);
-                let remote = action.get("remote_input").and_then(Value::as_bool).unwrap_or(false);
+                let id = action
+                    .get("action_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(index as i64);
+                let remote = action
+                    .get("remote_input")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 if remote {
                     can_reply = true;
                 }
                 actions.push(ActionView { id, name });
             }
         }
-        let icon = embedded_icon(&body).or_else(|| self.icon_url_for(&pkg)).unwrap_or_default();
+        let icon = embedded_icon(&body)
+            .or_else(|| self.icon_url_for(&pkg))
+            .unwrap_or_default();
         let fingerprint = format!("{title}\n{content}\n{}", actions.len());
-        let previous = self.notifications.iter().find(|(id, _)| id == &key).map(|(_, notice)| notice.clone());
-        if let Some(previous) = &previous {
-            if previous.fingerprint == fingerprint && previous.shown_at.elapsed() < Duration::from_secs(1) {
-                return Vec::new();
-            }
+        let previous = self
+            .notifications
+            .iter()
+            .find(|(id, _)| id == &key)
+            .map(|(_, notice)| notice.clone());
+        if let Some(previous) = &previous
+            && previous.fingerprint == fingerprint
+            && previous.shown_at.elapsed() < Duration::from_secs(1)
+        {
+            return Vec::new();
         }
         self.notifications.retain(|(id, _)| id != &key);
         self.notifications.push_front((
@@ -1112,13 +1283,24 @@ impl Desk {
             self.notifications.pop_back();
         }
         let mut effects = vec![Effect::Publish];
-        if previous.as_ref().is_none_or(|item| item.fingerprint != fingerprint) {
+        if previous
+            .as_ref()
+            .is_none_or(|item| item.fingerprint != fingerprint)
+        {
             effects.push(Effect::Banner {
                 app: clip_banner(&app),
                 title: clip_banner(&title),
                 body: clip_banner(&content),
-                key: self.notifications.front().map(|(key, _)| key.clone()).unwrap_or_default(),
-                pkg: self.notifications.front().map(|(_, notice)| notice.pkg.clone()).unwrap_or_default(),
+                key: self
+                    .notifications
+                    .front()
+                    .map(|(key, _)| key.clone())
+                    .unwrap_or_default(),
+                pkg: self
+                    .notifications
+                    .front()
+                    .map(|(_, notice)| notice.pkg.clone())
+                    .unwrap_or_default(),
                 icon_png: png_of_data_url(&icon),
             });
         }
@@ -1130,11 +1312,21 @@ impl Desk {
         if pkg.is_empty() {
             return None;
         }
-        let named = self.apps.iter().find(|app| app.pkg == pkg).map(|app| app.icon_name.as_str()).unwrap_or("");
+        let named = self
+            .apps
+            .iter()
+            .find(|app| app.pkg == pkg)
+            .map(|app| app.icon_name.as_str())
+            .unwrap_or("");
         if let Some(url) = self.icons.get(named).filter(|url| !url.is_empty()) {
             return Some(url.clone());
         }
-        for key in [pkg.to_string(), format!("{pkg}.png"), format!("{pkg}.jpg"), format!("{pkg}.webp")] {
+        for key in [
+            pkg.to_string(),
+            format!("{pkg}.png"),
+            format!("{pkg}.jpg"),
+            format!("{pkg}.webp"),
+        ] {
             if let Some(url) = self.icons.get(&key) {
                 return Some(url.clone());
             }
@@ -1156,7 +1348,10 @@ impl Desk {
             1 => {
                 self.clipboard_ready = true;
                 vec![
-                    Effect::Send { service: 9, data: json!({ "msgId": 2, "data": { "version": 1 } }) },
+                    Effect::Send {
+                        service: 9,
+                        data: json!({ "msgId": 2, "data": { "version": 1 } }),
+                    },
                     Effect::Note("Clipboard sync is on.".into()),
                     Effect::Publish,
                 ]
@@ -1171,12 +1366,21 @@ impl Desk {
                         return Vec::new();
                     }
                     self.last_clip = Some(text.to_string());
-                    return vec![Effect::Paste(text.to_string()), Effect::Note("Copied from the phone.".into())];
+                    return vec![
+                        Effect::Paste(text.to_string()),
+                        Effect::Note("Copied from the phone.".into()),
+                    ];
                 }
-                let files = nested.get("filelist").or_else(|| nested.get("fileList")).and_then(Value::as_array);
+                let files = nested
+                    .get("filelist")
+                    .or_else(|| nested.get("fileList"))
+                    .and_then(Value::as_array);
                 if files.is_some() {
                     return vec![
-                        Effect::Send { service: 9, data: json!({ "msgId": 4, "data": { "clipId": clip_id } }) },
+                        Effect::Send {
+                            service: 9,
+                            data: json!({ "msgId": 4, "data": { "clipId": clip_id } }),
+                        },
                         Effect::Note("The phone copied a file. Saving it.".into()),
                     ];
                 }
@@ -1184,7 +1388,10 @@ impl Desk {
             }
             7 => {
                 self.clipboard_ready = false;
-                vec![Effect::Note("The phone turned clipboard sync off.".into()), Effect::Publish]
+                vec![
+                    Effect::Note("The phone turned clipboard sync off.".into()),
+                    Effect::Publish,
+                ]
             }
             _ => Vec::new(),
         }
@@ -1198,11 +1405,17 @@ impl Desk {
             8 => self.on_state(data),
             12 => {
                 let pkg = nested_text(data, "pkg").unwrap_or_default();
-                if let Some((id, _)) = self.sessions.iter().find(|(_, session)| session.pkg == pkg) {
+                if let Some((id, _)) = self.sessions.iter().find(|(_, session)| session.pkg == pkg)
+                {
                     self.visible = Some(id.clone());
                 }
                 self.starting = false;
-                vec![Effect::Note("The phone opened that app on a screen that is already up.".into()), Effect::Publish]
+                vec![
+                    Effect::Note(
+                        "The phone opened that app on a screen that is already up.".into(),
+                    ),
+                    Effect::Publish,
+                ]
             }
             13 => self.on_focus(data),
             16 => self.on_rotation(data),
@@ -1220,7 +1433,9 @@ impl Desk {
         let cmp = text_field(&nested, "cmp").unwrap_or_default();
         let user_id = nested.get("userId").and_then(Value::as_i64).unwrap_or(0);
         let source = nested.get("source").and_then(Value::as_i64).unwrap_or(1);
-        let title = text_field(&nested, "pkgName").filter(|text| !text.is_empty()).unwrap_or_else(|| view_title(&pkg));
+        let title = text_field(&nested, "pkgName")
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| view_title(&pkg));
         if self.pending_quiet.contains_key(&pkg) {
             return Vec::new();
         }
@@ -1245,7 +1460,10 @@ impl Desk {
         self.pending_title.insert(pkg.clone(), title);
         let token = self.begin_start();
         let mut effects = vec![
-            Effect::Send { service: 15, data: stream_start(&pkg, &cmp, user_id, source, self.instance_id) },
+            Effect::Send {
+                service: 15,
+                data: stream_start(&pkg, &cmp, user_id, source, self.instance_id),
+            },
             Effect::WatchStart { token },
         ];
         if !quiet {
@@ -1256,14 +1474,15 @@ impl Desk {
 
     fn on_offer(&mut self, data: &Value) -> Vec<Effect> {
         let nested = offer_fields(data);
-        let Some(session_id) = id_string(nested.get("sessionId")) else { return Vec::new() };
+        let Some(session_id) = id_string(nested.get("sessionId")) else {
+            return Vec::new();
+        };
         let mut pkg = text_field(&nested, "pkg").unwrap_or_default();
-        if pkg.is_empty() {
-            if let Some((name, at)) = &self.opened_at {
-                if at.elapsed() < Duration::from_secs(20) {
-                    pkg = name.clone();
-                }
-            }
+        if pkg.is_empty()
+            && let Some((name, at)) = &self.opened_at
+            && at.elapsed() < Duration::from_secs(20)
+        {
+            pkg = name.clone();
         }
         if pkg.is_empty() {
             pkg = "mirror".into();
@@ -1271,15 +1490,26 @@ impl Desk {
         let user_id = nested.get("userId").and_then(Value::as_i64).unwrap_or(0);
         let width = nested.get("width").and_then(Value::as_i64).unwrap_or(0);
         let height = nested.get("height").and_then(Value::as_i64).unwrap_or(0);
-        let display_id = nested.get("displayId").and_then(Value::as_i64).unwrap_or(-1);
+        let display_id = nested
+            .get("displayId")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
         let title = self
             .sessions
             .get(&session_id)
             .map(|session| session.title.clone())
             .or_else(|| self.pending_title.get(&pkg).cloned())
-            .or_else(|| self.apps.iter().find(|app| app.pkg == pkg).map(|app| app.name.clone()))
+            .or_else(|| {
+                self.apps
+                    .iter()
+                    .find(|app| app.pkg == pkg)
+                    .map(|app| app.name.clone())
+            })
             .unwrap_or_else(|| view_title(&pkg));
-        let quiet = self.sessions.get(&session_id).is_some_and(|session| session.quiet)
+        let quiet = self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.quiet)
             || self.pending_quiet.get(&pkg).copied().unwrap_or(false);
         self.pending_quiet.remove(&pkg);
         self.pending_title.remove(&pkg);
@@ -1312,7 +1542,10 @@ impl Desk {
         }
         self.starting = false;
         let mut effects = Vec::new();
-        match webrtc_value(&nested).as_ref().and_then(|value| sdp_of_value(value, "offer")) {
+        match webrtc_value(&nested)
+            .as_ref()
+            .and_then(|value| sdp_of_value(value, "offer"))
+        {
             // A later cmd 3 only refreshes the display size. Answering it again
             // tears down the picture, and the window keeps the black frame it already painted.
             Some(sdp) if !repeat => {
@@ -1320,11 +1553,20 @@ impl Desk {
                     session.saw_offer = true;
                 }
                 let names = video_codec_names(&sdp);
-                let pkg_name = self.sessions.get(&session_id).map(|session| session.pkg.clone()).unwrap_or_else(|| "mirror".into());
+                let pkg_name = self
+                    .sessions
+                    .get(&session_id)
+                    .map(|session| session.pkg.clone())
+                    .unwrap_or_else(|| "mirror".into());
                 // Leave the offer intact. Filtering it to H.264 makes this Mac's
                 // web view reject the video section. The phone then encodes a codec
                 // the view can play, and the view decodes it in hardware.
-                effects.push(Effect::Offer { session_id, sdp, quiet: quiet_session, pkg: pkg_name });
+                effects.push(Effect::Offer {
+                    session_id,
+                    sdp,
+                    quiet: quiet_session,
+                    pkg: pkg_name,
+                });
                 if !quiet_session {
                     let note = if names.is_empty() {
                         "The phone offered its screen.".to_string()
@@ -1336,7 +1578,9 @@ impl Desk {
             }
             Some(_) => {}
             None if nested.get("webRTCData").is_some() => {
-                effects.push(Effect::Note("The phone's screen description could not be read.".into()));
+                effects.push(Effect::Note(
+                    "The phone's screen description could not be read.".into(),
+                ));
             }
             None => {}
         }
@@ -1349,7 +1593,10 @@ impl Desk {
         let nested = offer_fields(data);
         let state = nested.get("state").and_then(Value::as_i64).unwrap_or(-1);
         let session_id = id_string(nested.get("sessionId")).unwrap_or_default();
-        let display_id = nested.get("displayId").and_then(Value::as_i64).unwrap_or(-1);
+        let display_id = nested
+            .get("displayId")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
         if state == 1 {
             let touch = json_flag(nested.get("supportTouch"));
             let mut announce_touch = false;
@@ -1362,12 +1609,17 @@ impl Desk {
                 }
                 session.support_touch |= touch;
             }
-            let quiet = self.sessions.get(&session_id).is_some_and(|session| session.quiet);
+            let quiet = self
+                .sessions
+                .get(&session_id)
+                .is_some_and(|session| session.quiet);
             let mut effects = self.arm_cap(display_id);
             if !quiet {
                 effects.push(Effect::Note("The phone started sending its screen.".into()));
                 if announce_touch {
-                    effects.push(Effect::Note("This app screen takes a finger, so a hold and a swipe can land.".into()));
+                    effects.push(Effect::Note(
+                        "This app screen takes a finger, so a hold and a swipe can land.".into(),
+                    ));
                 }
             }
             effects.push(Effect::Publish);
@@ -1397,12 +1649,16 @@ impl Desk {
 
     fn on_focus(&mut self, data: &Value) -> Vec<Effect> {
         let nested = offer_fields(data);
-        let display_id = nested.get("displayId").and_then(Value::as_i64).unwrap_or(-1);
+        let display_id = nested
+            .get("displayId")
+            .and_then(Value::as_i64)
+            .unwrap_or(-1);
         let title = text_field(&nested, "appName").unwrap_or_default();
         let pkg = text_field(&nested, "pkg").unwrap_or_default();
         let mut quiet_id = None;
         for (id, session) in &mut self.sessions {
-            let matches = (display_id >= 0 && session.display_id == display_id) || (session.display_id < 0 && !pkg.is_empty() && session.pkg == pkg);
+            let matches = (display_id >= 0 && session.display_id == display_id)
+                || (session.display_id < 0 && !pkg.is_empty() && session.pkg == pkg);
             if matches {
                 if !title.is_empty() {
                     session.title = title.clone();
@@ -1419,42 +1675,61 @@ impl Desk {
         }
         let mut effects = vec![Effect::Publish];
         if let Some(session_id) = quiet_id {
-            effects.push(Effect::CloseLater { session_id, secs: 3 });
+            effects.push(Effect::CloseLater {
+                session_id,
+                secs: 3,
+            });
         }
         effects
     }
 
     fn on_rotation(&mut self, data: &Value) -> Vec<Effect> {
         let nested = offer_fields(data);
-        let Some(session_id) = id_string(nested.get("sessionId")) else { return Vec::new() };
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            if let Some(display_id) = nested.get("displayId").and_then(Value::as_i64) {
-                session.display_id = display_id;
-            }
+        let Some(session_id) = id_string(nested.get("sessionId")) else {
+            return Vec::new();
+        };
+        if let Some(session) = self.sessions.get_mut(&session_id)
+            && let Some(display_id) = nested.get("displayId").and_then(Value::as_i64)
+        {
+            session.display_id = display_id;
         }
         vec![Effect::Publish]
     }
 
     fn on_ice(&mut self, data: &Value) -> Vec<Effect> {
         let nested = offer_fields(data);
-        let session_id = id_string(nested.get("sessionId")).or_else(|| id_string(data.get("sessionId")));
+        let session_id =
+            id_string(nested.get("sessionId")).or_else(|| id_string(data.get("sessionId")));
         let Some(session_id) = session_id else {
             return self.note_ice_shape();
         };
         let Some(inner) = ice_value(&nested).or_else(|| ice_value(data)) else {
             return self.note_ice_shape();
         };
-        let Some(candidate) = inner.get("candidate").and_then(Value::as_str).map(str::trim).filter(|text| text.contains("candidate:")) else {
+        let Some(candidate) = inner
+            .get("candidate")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| text.contains("candidate:"))
+        else {
             return self.note_ice_shape();
         };
-        let candidate = candidate.strip_prefix("a=").unwrap_or(candidate).to_string();
+        let candidate = candidate
+            .strip_prefix("a=")
+            .unwrap_or(candidate)
+            .to_string();
         let label = json_i64(inner.get("label").or_else(|| inner.get("sdpMLineIndex")));
         let mid = match inner.get("id").or_else(|| inner.get("mid")) {
             Some(Value::String(text)) if !text.is_empty() => text.clone(),
             Some(Value::Number(number)) => number.to_string(),
             _ => "0".to_string(),
         };
-        let mut effects = vec![Effect::Ice { session_id, candidate, label, mid }];
+        let mut effects = vec![Effect::Ice {
+            session_id,
+            candidate,
+            label,
+            mid,
+        }];
         if !self.ice_seen_noted {
             self.ice_seen_noted = true;
             effects.push(Effect::Note("The phone sent a screen address.".into()));
@@ -1467,7 +1742,9 @@ impl Desk {
             return Vec::new();
         }
         self.ice_shape_noted = true;
-        vec![Effect::Note("The phone sent a screen address this Mac could not read.".into())]
+        vec![Effect::Note(
+            "The phone sent a screen address this Mac could not read.".into(),
+        )]
     }
 
     fn on_apps(&mut self, data: &Value) -> Vec<Effect> {
@@ -1478,8 +1755,14 @@ impl Desk {
         if cmd != 1 {
             return Vec::new();
         }
-        self.apps = read_apps(data.get("apps")).into_iter().chain(read_apps(data.get("wpApps"))).collect();
-        let mut effects = vec![Effect::Note(format!("{} apps from the phone.", self.apps.len())), Effect::Publish];
+        self.apps = read_apps(data.get("apps"))
+            .into_iter()
+            .chain(read_apps(data.get("wpApps")))
+            .collect();
+        let mut effects = vec![
+            Effect::Note(format!("{} apps from the phone.", self.apps.len())),
+            Effect::Publish,
+        ];
         if let (Some(port), Some(fingerprint)) = (port_of(data), text_field(data, "fingerprint")) {
             effects.push(Effect::Pull(PullJob {
                 port,
@@ -1518,18 +1801,30 @@ impl Desk {
                 }
             }
             5 => {
-                let cid = data.get("cid").and_then(Value::as_i64).unwrap_or(self.cross_cid);
+                let cid = data
+                    .get("cid")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(self.cross_cid);
                 self.cross_active = false;
                 vec![
-                    Effect::Send { service: 26, data: json!({ "ver": "1", "cmd": 6, "cid": cid }) },
+                    Effect::Send {
+                        service: 26,
+                        data: json!({ "ver": "1", "cmd": 6, "cid": cid }),
+                    },
                     Effect::Status,
                     Effect::Note("The phone ended cross control.".into()),
                     Effect::Publish,
                 ]
             }
             7 => {
-                self.cross_width = data.get("width").and_then(Value::as_i64).unwrap_or(self.cross_width);
-                self.cross_height = data.get("height").and_then(Value::as_i64).unwrap_or(self.cross_height);
+                self.cross_width = data
+                    .get("width")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(self.cross_width);
+                self.cross_height = data
+                    .get("height")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(self.cross_height);
                 vec![Effect::Publish]
             }
             _ => Vec::new(),
@@ -1537,7 +1832,9 @@ impl Desk {
     }
 
     fn on_station(&mut self, data: &Value) -> Vec<Effect> {
-        let Some(body) = station_body(data) else { return Vec::new() };
+        let Some(body) = station_body(data) else {
+            return Vec::new();
+        };
         let type_id = body.get("type").and_then(Value::as_i64);
         if type_id == Some(1) {
             if let Some(share) = phone_share_from(&body) {
@@ -1636,7 +1933,10 @@ pub fn decode_icon(name: &str, bytes: &[u8]) -> Option<(String, String)> {
     }
     let clean = std::path::Path::new(name).file_name()?.to_str()?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Some((clean.to_string(), format!("data:image/png;base64,{encoded}")))
+    Some((
+        clean.to_string(),
+        format!("data:image/png;base64,{encoded}"),
+    ))
 }
 
 fn clip_text(text: &str) -> String {
@@ -1648,12 +1948,18 @@ fn clip_text(text: &str) -> String {
 
 fn embedded_icon(body: &Value) -> Option<String> {
     for key in ["icon", "largeIcon", "smallIcon", "appIcon", "picture"] {
-        let Some(text) = text_field(body, key) else { continue };
+        let Some(text) = text_field(body, key) else {
+            continue;
+        };
         if text.starts_with("data:image/") && text.len() < 400_000 {
             return Some(text);
         }
         if text.len() < 300_000 && (text.starts_with("iVBORw0KGgo") || text.starts_with("/9j/")) {
-            let kind = if text.starts_with("/9j/") { "jpeg" } else { "png" };
+            let kind = if text.starts_with("/9j/") {
+                "jpeg"
+            } else {
+                "png"
+            };
             return Some(format!("data:image/{kind};base64,{text}"));
         }
     }
@@ -1665,7 +1971,9 @@ fn png_of_data_url(url: &str) -> Option<Vec<u8>> {
     if !kind.starts_with("data:image/") {
         return None;
     }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
     if bytes.len() < 32 || bytes.len() > 256 * 1024 {
         return None;
     }
@@ -1675,12 +1983,21 @@ fn png_of_data_url(url: &str) -> Option<Vec<u8>> {
 }
 
 fn clip_banner(text: &str) -> String {
-    let flat: String = text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).take(180).collect();
+    let flat: String = text
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .take(180)
+        .collect();
     flat.trim().to_string()
 }
 
 fn text_field(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn nested_text(value: &Value, key: &str) -> Option<String> {
@@ -1697,7 +2014,10 @@ fn body_actions(data: &Value) -> Option<&Vec<Value>> {
 }
 
 fn offer_fields(data: &Value) -> Value {
-    if data.get("sessionId").is_some() || data.get("state").is_some() || data.get("webRTCData").is_some() {
+    if data.get("sessionId").is_some()
+        || data.get("state").is_some()
+        || data.get("webRTCData").is_some()
+    {
         return data.clone();
     }
     data.get("data").cloned().unwrap_or_else(|| data.clone())
@@ -1720,10 +2040,12 @@ fn webrtc_value(data: &Value) -> Option<Value> {
 }
 
 fn ice_value(data: &Value) -> Option<Value> {
-    if let Some(text) = data.get("candidate").and_then(Value::as_str) {
-        if text.contains("candidate:") {
-            return Some(json!({ "candidate": text, "label": data.get("label").cloned().unwrap_or(Value::from(0)), "id": data.get("id").cloned().unwrap_or(Value::from("0")) }));
-        }
+    if let Some(text) = data.get("candidate").and_then(Value::as_str)
+        && text.contains("candidate:")
+    {
+        return Some(
+            json!({ "candidate": text, "label": data.get("label").cloned().unwrap_or(Value::from(0)), "id": data.get("id").cloned().unwrap_or(Value::from("0")) }),
+        );
     }
     match data.get("data")? {
         Value::String(text) => {
@@ -1765,21 +2087,27 @@ fn json_i64_opt(value: Option<&Value>) -> Option<i64> {
 }
 
 fn wire_session_id(session_id: &str) -> Value {
-    session_id.parse::<i64>().map(Value::from).unwrap_or_else(|_| Value::from(1))
+    session_id
+        .parse::<i64>()
+        .map(Value::from)
+        .unwrap_or_else(|_| Value::from(1))
 }
 
 fn webcam_session_id(nested: &Value, existing: Option<String>) -> String {
-    if let Some(id) = id_string(nested.get("sessionId")) {
-        if id.parse::<i64>().is_ok() {
-            return id;
-        }
+    if let Some(id) = id_string(nested.get("sessionId"))
+        && id.parse::<i64>().is_ok()
+    {
+        return id;
     }
-    if let Some(id) = existing {
-        if id.parse::<i64>().is_ok() {
-            return id;
-        }
+    if let Some(id) = existing
+        && id.parse::<i64>().is_ok()
+    {
+        return id;
     }
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis().to_string()).unwrap_or_else(|_| "1".into())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis().to_string())
+        .unwrap_or_else(|_| "1".into())
 }
 
 fn webcam_request() -> Value {
@@ -1832,7 +2160,11 @@ fn sdp_of_value(value: &Value, kind: &str) -> Option<String> {
     if typed.is_some() && typed != Some(kind) {
         return None;
     }
-    value.get("sdp").and_then(Value::as_str).filter(|sdp| sdp.contains("v=")).map(str::to_string)
+    value
+        .get("sdp")
+        .and_then(Value::as_str)
+        .filter(|sdp| sdp.contains("v="))
+        .map(str::to_string)
 }
 
 /// The phone lists H.265, VP8, VP9 and AV1 ahead of H.264. This phone's only H.264 line is
@@ -1840,7 +2172,11 @@ fn sdp_of_value(value: &Value, kind: &str) -> Option<String> {
 /// that points at one of them. Leave a video section with no H.264 unchanged.
 pub fn h264_only_sdp(sdp: &str) -> String {
     let normalized = sdp.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<String> = normalized.split('\n').filter(|line| !line.is_empty()).map(str::to_string).collect();
+    let lines: Vec<String> = normalized
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
     if lines.is_empty() {
         return String::new();
     }
@@ -1859,10 +2195,10 @@ pub fn h264_only_sdp(sdp: &str) -> String {
         let section = &lines[index..end];
         let mut keep = HashSet::new();
         for line in section {
-            if let Some((pt, codec)) = rtpmap(line) {
-                if codec.eq_ignore_ascii_case("H264") {
-                    keep.insert(pt);
-                }
+            if let Some((pt, codec)) = rtpmap(line)
+                && codec.eq_ignore_ascii_case("H264")
+            {
+                keep.insert(pt);
             }
         }
         if keep.is_empty() {
@@ -1872,10 +2208,10 @@ pub fn h264_only_sdp(sdp: &str) -> String {
         }
         let h264 = keep.clone();
         for line in section {
-            if let Some((pt, target)) = fmtp_apt(line) {
-                if h264.contains(&target) {
-                    keep.insert(pt);
-                }
+            if let Some((pt, target)) = fmtp_apt(line)
+                && h264.contains(&target)
+            {
+                keep.insert(pt);
             }
         }
         let parts: Vec<&str> = section[0].split_whitespace().collect();
@@ -1884,7 +2220,11 @@ pub fn h264_only_sdp(sdp: &str) -> String {
             index = end;
             continue;
         }
-        let pts: Vec<&str> = parts[3..].iter().copied().filter(|pt| keep.contains(*pt)).collect();
+        let pts: Vec<&str> = parts[3..]
+            .iter()
+            .copied()
+            .filter(|pt| keep.contains(*pt))
+            .collect();
         if pts.is_empty() {
             out.extend(section.iter().cloned());
             index = end;
@@ -1900,10 +2240,10 @@ pub fn h264_only_sdp(sdp: &str) -> String {
             if line.contains("urn:3gpp:video-orientation") {
                 continue;
             }
-            if let Some(pt) = payload_attribute(line) {
-                if !keep.contains(&pt) {
-                    continue;
-                }
+            if let Some(pt) = payload_attribute(line)
+                && !keep.contains(&pt)
+            {
+                continue;
             }
             out.push(line.clone());
         }
@@ -1923,7 +2263,11 @@ fn fmtp_params<'a>(line: &'a str, pt: &str) -> Option<&'a str> {
 fn fmtp_value<'a>(params: &'a str, key: &str) -> Option<&'a str> {
     params.split(';').find_map(|part| {
         let (name, value) = part.trim().split_once('=')?;
-        if name.trim().eq_ignore_ascii_case(key) { Some(value.trim()) } else { None }
+        if name.trim().eq_ignore_ascii_case(key) {
+            Some(value.trim())
+        } else {
+            None
+        }
     })
 }
 
@@ -1964,17 +2308,27 @@ fn answer_shape(sdp: &str) -> String {
 }
 
 fn answered_h264_profile(sdp: &str) -> Option<String> {
-    let lines: Vec<&str> = sdp.split(['\r', '\n']).filter(|line| !line.is_empty()).collect();
+    let lines: Vec<&str> = sdp
+        .split(['\r', '\n'])
+        .filter(|line| !line.is_empty())
+        .collect();
     for line in &lines {
-        let Some((pt, codec)) = rtpmap(line) else { continue };
+        let Some((pt, codec)) = rtpmap(line) else {
+            continue;
+        };
         if !codec.eq_ignore_ascii_case("h264") {
             continue;
         }
-        let params = lines.iter().find_map(|item| fmtp_params(item, &pt)).unwrap_or("");
+        let params = lines
+            .iter()
+            .find_map(|item| fmtp_params(item, &pt))
+            .unwrap_or("");
         if fmtp_value(params, "apt").is_some() {
             continue;
         }
-        let Some(profile) = fmtp_value(params, "profile-level-id") else { continue };
+        let Some(profile) = fmtp_value(params, "profile-level-id") else {
+            continue;
+        };
         if profile.len() == 6 && profile.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Some(profile.to_ascii_lowercase());
         }
@@ -1986,10 +2340,15 @@ fn video_codec_names(sdp: &str) -> Vec<String> {
     let lines: Vec<&str> = sdp.split(['\r', '\n']).collect();
     let mut names = Vec::new();
     for line in &lines {
-        let Some((pt, codec)) = rtpmap(line) else { continue };
+        let Some((pt, codec)) = rtpmap(line) else {
+            continue;
+        };
         let name = match codec.to_ascii_uppercase().as_str() {
             "H264" => {
-                let params = lines.iter().find_map(|item| fmtp_params(item, &pt)).unwrap_or("");
+                let params = lines
+                    .iter()
+                    .find_map(|item| fmtp_params(item, &pt))
+                    .unwrap_or("");
                 match fmtp_value(params, "profile-level-id") {
                     Some(profile) if !profile.is_empty() => format!("H264 {profile}"),
                     _ => "H264".to_string(),
@@ -2021,9 +2380,13 @@ fn rtpmap(line: &str) -> Option<(String, String)> {
 fn fmtp_apt(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix("a=fmtp:")?;
     let (pt, params) = rest.split_once(' ')?;
-    let apt = params.split(';').find_map(|part| part.trim().strip_prefix("apt="))?;
+    let apt = params
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("apt="))?;
     let apt = apt.split_whitespace().next().unwrap_or(apt);
-    if !pt.bytes().all(|byte| byte.is_ascii_digit()) || !apt.bytes().all(|byte| byte.is_ascii_digit()) {
+    if !pt.bytes().all(|byte| byte.is_ascii_digit())
+        || !apt.bytes().all(|byte| byte.is_ascii_digit())
+    {
         return None;
     }
     Some((pt.to_string(), apt.to_string()))
@@ -2036,11 +2399,17 @@ fn payload_attribute(line: &str) -> Option<String> {
         return None;
     }
     let pt = tail.split(|byte: char| !byte.is_ascii_digit()).next()?;
-    if pt.is_empty() { None } else { Some(pt.to_string()) }
+    if pt.is_empty() {
+        None
+    } else {
+        Some(pt.to_string())
+    }
 }
 
 fn read_apps(value: Option<&Value>) -> Vec<AppView> {
-    let Some(list) = value.and_then(Value::as_array) else { return Vec::new() };
+    let Some(list) = value.and_then(Value::as_array) else {
+        return Vec::new();
+    };
     list.iter()
         .filter_map(|item| {
             let pkg = text_field(item, "pkg")?;
@@ -2056,7 +2425,10 @@ fn read_apps(value: Option<&Value>) -> Vec<AppView> {
 }
 
 fn phone_share_from(body: &Value) -> Option<crate::nfs::PhoneShare> {
-    let nfs_port = u16::try_from(json_i64(body.get("nfsport").or_else(|| body.get("nfsPort")))).ok()?;
+    let nfs_port = u16::try_from(json_i64(
+        body.get("nfsport").or_else(|| body.get("nfsPort")),
+    ))
+    .ok()?;
     if nfs_port == 0 {
         return None;
     }
@@ -2069,7 +2441,12 @@ fn phone_share_from(body: &Value) -> Option<crate::nfs::PhoneShare> {
     if fingerprint.len() != 64 || !fingerprint.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
     }
-    Some(crate::nfs::PhoneShare { nfs_port, mount_port, export_path, fingerprint })
+    Some(crate::nfs::PhoneShare {
+        nfs_port,
+        mount_port,
+        export_path,
+        fingerprint,
+    })
 }
 
 fn station_body(data: &Value) -> Option<Value> {
@@ -2131,7 +2508,10 @@ mod tests {
         let sent = desk.clipboard_out("hello").unwrap();
         assert_eq!(sent["data"]["text"], "hello");
         assert!(desk.clipboard_out("hello").is_none());
-        let echo = desk.handle(9, &json!({ "msgId": 3, "data": { "clipId": 4, "text": "hello" } }));
+        let echo = desk.handle(
+            9,
+            &json!({ "msgId": 3, "data": { "clipId": 4, "text": "hello" } }),
+        );
         assert!(echo.is_empty());
         let empty = desk.handle(9, &json!({ "msgId": 3, "data": { "clipId": 0 } }));
         assert!(empty.is_empty());
@@ -2149,7 +2529,11 @@ mod tests {
             "data": { "package_name": "com.example.chat", "apk_name": "Chat", "title": "Ada", "content": "Hi" }
         });
         let effects = desk.handle(5, &posted);
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::Banner { .. })));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Banner { .. }))
+        );
         assert_eq!(desk.notifications().len(), 1);
         let again = desk.handle(5, &posted);
         assert!(again.is_empty());
@@ -2163,16 +2547,31 @@ mod tests {
             }
             _ => panic!("expected reply"),
         }
-        desk.handle(5, &json!({ "key": "k1", "event": 2, "type": 0, "version": "1.0" }));
+        desk.handle(
+            5,
+            &json!({ "key": "k1", "event": 2, "type": 0, "version": "1.0" }),
+        );
         assert!(desk.notifications().is_empty());
     }
 
     #[test]
     fn peer_start_uses_booleans() {
-        let value = peer_start("com.example.notes", "com.example.notes.Main", 0, 0, 1700000000000);
+        let value = peer_start(
+            "com.example.notes",
+            "com.example.notes.Main",
+            0,
+            0,
+            1700000000000,
+        );
         assert!(value["data"]["supportCustomDisplay"].is_boolean());
         assert_eq!(value["data"]["supportCustomDisplay"], false);
-        let app = stream_start("com.example.notes", "com.example.notes.Main", 0, 0, 1700000000000);
+        let app = stream_start(
+            "com.example.notes",
+            "com.example.notes.Main",
+            0,
+            0,
+            1700000000000,
+        );
         assert_eq!(app["data"]["supportCustomDisplay"], false);
         assert!(app["data"]["supportCustomDisplay"].is_boolean());
         assert_eq!(app["data"]["width"], 1920);
@@ -2187,8 +2586,15 @@ mod tests {
     #[test]
     fn cross_control_keeps_the_other_tiles() {
         let mut desk = Desk::new();
-        let effects = desk.handle(26, &json!({ "ver": "1", "cmd": 2, "cid": 1, "code": 1, "width": 1080, "height": 2400 }));
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::Status)));
+        let effects = desk.handle(
+            26,
+            &json!({ "ver": "1", "cmd": 2, "cid": 1, "code": 1, "width": 1080, "height": 2400 }),
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Status))
+        );
         assert!(desk.cross_active);
         assert_eq!(desk.cross_width, 1080);
     }
@@ -2211,14 +2617,17 @@ a=extmap:1 urn:3gpp:video-orientation\r\n\
 a=sendonly\r\n";
         let wrapped = serde_json::to_string(&json!({ "type": "offer", "sdp": sdp })).unwrap();
         let mut desk = Desk::new();
-        let effects = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 3,
-            "sessionId": "1700000000001",
-            "pkg": "mirror",
-            "userId": 0,
-            "webRTCData": wrapped
-        }));
+        let effects = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 3,
+                "sessionId": "1700000000001",
+                "pkg": "mirror",
+                "userId": 0,
+                "webRTCData": wrapped
+            }),
+        );
         let offered = effects.iter().find_map(|effect| match effect {
             Effect::Offer { sdp, quiet, .. } => Some((sdp.clone(), *quiet)),
             _ => None,
@@ -2288,37 +2697,57 @@ a=rtpmap:96 H264/90000\r\n\
 a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=420033\r\n";
         assert_eq!(answered_h264_profile(sdp).as_deref(), Some("420033"));
         let mut desk = Desk::new();
-        desk.sessions.insert("42".into(), Session {
-            pkg: "mirror".into(),
-            title: "Phone screen".into(),
-            user_id: 0,
-            display_id: -1,
-            width: 0,
-            height: 0,
-            quiet: false,
-            saw_offer: true,
-            support_touch: false,
-        });
+        desk.sessions.insert(
+            "42".into(),
+            Session {
+                pkg: "mirror".into(),
+                title: "Phone screen".into(),
+                user_id: 0,
+                display_id: -1,
+                width: 0,
+                height: 0,
+                quiet: false,
+                saw_offer: true,
+                support_touch: false,
+            },
+        );
         let effects = desk.answer("42", sdp).unwrap();
-        let notes: Vec<_> = effects.iter().filter_map(|effect| match effect {
-            Effect::Note(text) => Some(text.as_str()),
-            _ => None,
-        }).collect();
+        let notes: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::Note(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
             notes,
-            vec!["Answered the phone screen with H264 420033, setup unset, direction unset, 1 media."]
+            vec![
+                "Answered the phone screen with H264 420033, setup unset, direction unset, 1 media."
+            ]
         );
-        let answer = effects.iter().find_map(|effect| match effect {
-            Effect::Send { service, data } if *service == 15 && data["cmd"] == 4 => Some(data),
-            _ => None,
-        }).expect("answer");
+        let answer = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Send { service, data } if *service == 15 && data["cmd"] == 4 => Some(data),
+                _ => None,
+            })
+            .expect("answer");
         assert!(answer.get("sessionId").is_none());
         assert!(answer.get("webRTCData").is_none());
         assert_eq!(answer["data"]["sessionId"], "42");
         assert_eq!(answer["data"]["error"], 0);
-        let web = answer["data"]["webRTCData"].as_str().expect("webRTCData string");
+        let web = answer["data"]["webRTCData"]
+            .as_str()
+            .expect("webRTCData string");
         assert!(web.contains("420033"));
-        let ice = desk.ice("42", "candidate:1 1 udp 1 192.168.1.8 50000 typ host", 0, "0").expect("ice");
+        let ice = desk
+            .ice(
+                "42",
+                "candidate:1 1 udp 1 192.168.1.8 50000 typ host",
+                0,
+                "0",
+            )
+            .expect("ice");
         match ice {
             Effect::Send { service, data } => {
                 assert_eq!(service, 15);
@@ -2326,7 +2755,8 @@ a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=420033
                 assert!(data.get("sessionId").is_none());
                 assert_eq!(data["data"]["sessionId"], "42");
                 assert_eq!(data["data"]["type"], "candidate");
-                let body: serde_json::Value = serde_json::from_str(data["data"]["data"].as_str().unwrap()).unwrap();
+                let body: serde_json::Value =
+                    serde_json::from_str(data["data"]["data"].as_str().unwrap()).unwrap();
                 assert_eq!(body["id"], "0");
                 assert!(body["candidate"].as_str().unwrap().contains("192.168.1.8"));
             }
@@ -2340,26 +2770,35 @@ a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=420033
 a=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;profile-level-id=640c1f\r\n\
 a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f\r\n";
         let names = video_codec_names(sdp);
-        assert_eq!(names, vec!["H264 640c1f".to_string(), "H264 42e01f".to_string()]);
+        assert_eq!(
+            names,
+            vec!["H264 640c1f".to_string(), "H264 42e01f".to_string()]
+        );
     }
 
     #[test]
     fn offer_accepts_webrtc_object_and_leaves_h265_only() {
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H265/90000\r\n";
         let mut desk = Desk::new();
-        let effects = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 3,
-            "data": {
-                "sessionId": 42,
-                "pkg": "mirror",
-                "webRTCData": { "type": "offer", "sdp": sdp }
-            }
-        }));
-        let offered = effects.iter().find_map(|effect| match effect {
-            Effect::Offer { sdp, .. } => Some(sdp.clone()),
-            _ => None,
-        }).expect("offer");
+        let effects = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 3,
+                "data": {
+                    "sessionId": 42,
+                    "pkg": "mirror",
+                    "webRTCData": { "type": "offer", "sdp": sdp }
+                }
+            }),
+        );
+        let offered = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Offer { sdp, .. } => Some(sdp.clone()),
+                _ => None,
+            })
+            .expect("offer");
         assert!(offered.contains("H265"));
         let ice = desk.handle(15, &json!({
             "ver": "1",
@@ -2368,23 +2807,36 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
             "data": { "type": "candidate", "label": 0, "id": "0", "candidate": "candidate:1 1 udp 1 192.168.1.35 50001 typ host" }
         }));
         match &ice[0] {
-            Effect::Ice { candidate, label, mid, .. } => {
+            Effect::Ice {
+                candidate,
+                label,
+                mid,
+                ..
+            } => {
                 assert!(candidate.contains("192.168.1.35"));
                 assert_eq!(*label, 0);
                 assert_eq!(mid, "0");
             }
             _ => panic!("expected ice"),
         }
-        let raw = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 20,
-            "sessionId": 42,
-            "data": "a=candidate:2 1 udp 1 192.168.1.35 50002 typ host",
-            "label": "1",
-            "id": 1
-        }));
+        let raw = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 20,
+                "sessionId": 42,
+                "data": "a=candidate:2 1 udp 1 192.168.1.35 50002 typ host",
+                "label": "1",
+                "id": 1
+            }),
+        );
         match &raw[0] {
-            Effect::Ice { candidate, label, mid, .. } => {
+            Effect::Ice {
+                candidate,
+                label,
+                mid,
+                ..
+            } => {
                 assert!(candidate.starts_with("candidate:"));
                 assert!(!candidate.starts_with("a="));
                 assert_eq!(*label, 1);
@@ -2399,27 +2851,47 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n";
         let wrapped = serde_json::to_string(&json!({ "type": "offer", "sdp": sdp })).unwrap();
         let mut desk = Desk::new();
-        let first = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 3,
-            "data": { "sessionId": 7, "pkg": "com.example.notes", "webRTCData": wrapped }
-        }));
-        assert!(first.iter().any(|effect| matches!(effect, Effect::Offer { .. })));
-        let second = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 3,
-            "data": {
-                "sessionId": 7,
-                "pkg": "com.example.notes",
-                "displayId": 4,
-                "width": 1600,
-                "height": 900,
-                "webRTCData": wrapped
-            }
-        }));
-        assert!(second.iter().all(|effect| !matches!(effect, Effect::Offer { .. })));
-        assert_eq!(desk.sessions.get("7").map(|session| session.display_id), Some(4));
-        assert_eq!(desk.sessions.get("7").map(|session| session.width), Some(1600));
+        let first = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 3,
+                "data": { "sessionId": 7, "pkg": "com.example.notes", "webRTCData": wrapped }
+            }),
+        );
+        assert!(
+            first
+                .iter()
+                .any(|effect| matches!(effect, Effect::Offer { .. }))
+        );
+        let second = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 3,
+                "data": {
+                    "sessionId": 7,
+                    "pkg": "com.example.notes",
+                    "displayId": 4,
+                    "width": 1600,
+                    "height": 900,
+                    "webRTCData": wrapped
+                }
+            }),
+        );
+        assert!(
+            second
+                .iter()
+                .all(|effect| !matches!(effect, Effect::Offer { .. }))
+        );
+        assert_eq!(
+            desk.sessions.get("7").map(|session| session.display_id),
+            Some(4)
+        );
+        assert_eq!(
+            desk.sessions.get("7").map(|session| session.width),
+            Some(1600)
+        );
     }
 
     #[test]
@@ -2427,42 +2899,66 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n";
         let wrapped = serde_json::to_string(&json!({ "type": "offer", "sdp": sdp })).unwrap();
         let mut desk = Desk::new();
-        desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 3,
-            "data": { "sessionId": 7, "pkg": "com.example.notes", "webRTCData": wrapped }
-        }));
-        let effects = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 8,
-            "data": {
-                "state": 1,
-                "sessionId": 7,
-                "displayId": 4,
-                "pkg": "com.example.notes",
-                "supportTouch": true
-            }
-        }));
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::Note(text) if text.contains("finger"))));
-        let view = desk.sessions().into_iter().find(|session| session.session_id == "7").expect("session");
+        desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 3,
+                "data": { "sessionId": 7, "pkg": "com.example.notes", "webRTCData": wrapped }
+            }),
+        );
+        let effects = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 8,
+                "data": {
+                    "state": 1,
+                    "sessionId": 7,
+                    "displayId": 4,
+                    "pkg": "com.example.notes",
+                    "supportTouch": true
+                }
+            }),
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Note(text) if text.contains("finger")))
+        );
+        let view = desk
+            .sessions()
+            .into_iter()
+            .find(|session| session.session_id == "7")
+            .expect("session");
         assert!(view.support_touch);
         assert_eq!(view.display_id, 4);
-        let again = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 8,
-            "data": { "state": 1, "sessionId": 7, "displayId": 4, "supportTouch": true }
-        }));
-        assert!(again.iter().all(|effect| !matches!(effect, Effect::Note(text) if text.contains("finger"))));
+        let again = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 8,
+                "data": { "state": 1, "sessionId": 7, "displayId": 4, "supportTouch": true }
+            }),
+        );
+        assert!(
+            again
+                .iter()
+                .all(|effect| !matches!(effect, Effect::Note(text) if text.contains("finger")))
+        );
     }
 
     #[test]
     fn a_missed_start_can_be_retried() {
         let mut desk = Desk::new();
         let effects = desk.start_mirror().unwrap();
-        let token = effects.iter().find_map(|effect| match effect {
-            Effect::WatchStart { token } => Some(*token),
-            _ => None,
-        }).unwrap();
+        let token = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::WatchStart { token } => Some(*token),
+                _ => None,
+            })
+            .unwrap();
         assert!(desk.give_up(token));
         assert!(desk.start_mirror().is_ok());
         assert!(!desk.give_up(token));
@@ -2492,58 +2988,92 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
         assert_eq!(sends[1].1["data"]["supportCustomDisplay"], false);
         assert!(sends[1].1["data"]["supportCustomDisplay"].is_boolean());
         let again = desk.start_mirror().expect("second tap waits");
-        assert!(again.iter().all(|effect| !matches!(effect, Effect::Send { .. })));
-        let echo = desk.handle(15, &json!({
-            "ver": "1",
-            "cmd": 2,
-            "data": { "pkg": "mirror", "source": 1 }
-        }));
-        assert!(echo.iter().all(|effect| !matches!(effect, Effect::Send { .. })));
+        assert!(
+            again
+                .iter()
+                .all(|effect| !matches!(effect, Effect::Send { .. }))
+        );
+        let echo = desk.handle(
+            15,
+            &json!({
+                "ver": "1",
+                "cmd": 2,
+                "data": { "pkg": "mirror", "source": 1 }
+            }),
+        );
+        assert!(
+            echo.iter()
+                .all(|effect| !matches!(effect, Effect::Send { .. }))
+        );
     }
 
     #[test]
     fn webcam_start_has_no_reply_flag_and_keeps_the_offer() {
         let mut desk = Desk::new();
         let start = desk.start_webcam().expect("start");
-        let request = start.iter().find_map(|effect| match effect {
-            Effect::Send { service: 3, data } => Some(data.clone()),
-            _ => None,
-        }).expect("request");
+        let request = start
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Send { service: 3, data } => Some(data.clone()),
+                _ => None,
+            })
+            .expect("request");
         assert_eq!(request["cmd"], 0);
         assert!(request["data"].get("isReply").is_none());
         assert_eq!(request["data"]["heartbeat"], 1);
         assert_eq!(request["data"]["minL"], 1);
         assert_eq!(request["data"]["lite"], 0);
         assert!(desk.webcam_heartbeat());
-        let accepted = desk.handle(3, &json!({
-            "ver": "1",
-            "cmd": 0,
-            "data": "{\"isReply\":1,\"heartbeat\":1}"
-        }));
+        let accepted = desk.handle(
+            3,
+            &json!({
+                "ver": "1",
+                "cmd": 0,
+                "data": "{\"isReply\":1,\"heartbeat\":1}"
+            }),
+        );
         assert!(accepted.iter().any(|effect| matches!(effect, Effect::Send { service: 3, data } if data["cmd"] == 1 && data["data"]["port"] == 6466 && data["data"]["heartbeat"] == 1)));
         let sdp = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96 98\r\na=rtpmap:96 H264/90000\r\na=rtpmap:98 VP8/90000\r\n";
         let wrapped = serde_json::to_string(&json!({ "type": "offer", "sdp": sdp })).unwrap();
-        let effects = desk.handle(3, &json!({
-            "ver": "1",
-            "cmd": 1,
-            "data": { "isWebRTC": 1, "sessionId": 42, "webRTCData": wrapped }
-        }));
-        let offer = effects.iter().find_map(|effect| match effect {
-            Effect::Offer { sdp, pkg, session_id, .. } => Some((sdp.clone(), pkg.clone(), session_id.clone())),
-            _ => None,
-        }).expect("offer");
+        let effects = desk.handle(
+            3,
+            &json!({
+                "ver": "1",
+                "cmd": 1,
+                "data": { "isWebRTC": 1, "sessionId": 42, "webRTCData": wrapped }
+            }),
+        );
+        let offer = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Offer {
+                    sdp,
+                    pkg,
+                    session_id,
+                    ..
+                } => Some((sdp.clone(), pkg.clone(), session_id.clone())),
+                _ => None,
+            })
+            .expect("offer");
         assert_eq!(offer.1, "webcam");
         assert_eq!(offer.2, "42");
         assert!(offer.0.contains("VP8"));
         assert!(desk.webcam_flip().is_ok());
-        let answer = desk.answer("42", "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n").expect("answer");
-        let sent = answer.iter().find_map(|effect| match effect {
-            Effect::Send { service: 3, data } if data["cmd"] == 17 => Some(data.clone()),
-            _ => None,
-        }).expect("cmd 17");
+        let answer = desk
+            .answer("42", "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n")
+            .expect("answer");
+        let sent = answer
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Send { service: 3, data } if data["cmd"] == 17 => Some(data.clone()),
+                _ => None,
+            })
+            .expect("cmd 17");
         assert!(sent["data"]["sessionId"].is_number());
         assert_eq!(sent["data"]["sessionId"], 42);
-        let ice = desk.ice("42", "candidate:1 1 udp 1 192.168.1.4 9 typ host", 0, "0").expect("ice");
+        let ice = desk
+            .ice("42", "candidate:1 1 udp 1 192.168.1.4 9 typ host", 0, "0")
+            .expect("ice");
         match ice {
             Effect::Send { data, .. } => assert_eq!(data["data"]["sessionId"], 42),
             _ => panic!("ice"),
@@ -2551,9 +3081,20 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
         let mut early = Desk::new();
         early.start_webcam().unwrap();
         let stop = early.stop_pkg("webcam");
-        assert!(start.iter().any(|effect| matches!(effect, Effect::Obs { on: true })));
-        assert!(stop.iter().any(|effect| matches!(effect, Effect::Send { service: 3, data } if data["cmd"] == 2)));
-        assert!(stop.iter().any(|effect| matches!(effect, Effect::Obs { on: false })));
+        assert!(
+            start
+                .iter()
+                .any(|effect| matches!(effect, Effect::Obs { on: true }))
+        );
+        assert!(
+            stop.iter().any(
+                |effect| matches!(effect, Effect::Send { service: 3, data } if data["cmd"] == 2)
+            )
+        );
+        assert!(
+            stop.iter()
+                .any(|effect| matches!(effect, Effect::Obs { on: false }))
+        );
         assert!(!early.webcam_heartbeat());
     }
 
@@ -2580,7 +3121,8 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
         let mut desk = Desk::new();
         let request = Desk::phone_browse_request("ab");
         assert_eq!(request["cmd"], 1001);
-        let inner: serde_json::Value = serde_json::from_str(request["data"].as_str().unwrap()).unwrap();
+        let inner: serde_json::Value =
+            serde_json::from_str(request["data"].as_str().unwrap()).unwrap();
         assert_eq!(inner["type"], 0);
         assert_eq!(inner["dt2type"], 2);
         assert_eq!(inner["fp"], "AB");
@@ -2589,15 +3131,29 @@ a=rtpmap:98 H264/90000\r\na=fmtp:98 packetization-mode=1;profile-level-id=42e01f
             "cmd": 1001,
             "data": "{\"type\":1,\"path\":\"/sdcard\",\"port\":111,\"nfsport\":2049,\"fp\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"nfs_version\":8}"
         }));
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::ShareReady)));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::ShareReady))
+        );
         let share = desk.phone_share().expect("share");
         assert_eq!(share.nfs_port, 2049);
         assert_eq!(share.export_path, "/sdcard");
-        let asking = desk.handle(168, &json!({
-            "cmd": 1001,
-            "data": { "type": 0, "fp": "phone" }
-        }));
-        assert!(asking.iter().any(|effect| matches!(effect, Effect::Note(_))));
-        assert!(desk.handle(168, &json!({ "cmd": 1001, "data": { "type": 0 } })).is_empty());
+        let asking = desk.handle(
+            168,
+            &json!({
+                "cmd": 1001,
+                "data": { "type": 0, "fp": "phone" }
+            }),
+        );
+        assert!(
+            asking
+                .iter()
+                .any(|effect| matches!(effect, Effect::Note(_)))
+        );
+        assert!(
+            desk.handle(168, &json!({ "cmd": 1001, "data": { "type": 0 } }))
+                .is_empty()
+        );
     }
 }

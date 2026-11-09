@@ -214,20 +214,17 @@ fn file_names(body: &str) -> Vec<String> {
     let mut names = Vec::new();
     if let Some(list) = value.get("file").and_then(|item| item.as_array()) {
         for item in list {
-            if let Some(name) = item.get("name").and_then(|name| name.as_str()) {
-                if !name.is_empty() {
+            if let Some(name) = item.get("name").and_then(|name| name.as_str())
+                && !name.is_empty() {
                     names.push(name.to_string());
                 }
-            }
         }
     }
-    if names.is_empty() {
-        if let Some(name) = value.get("fileName").and_then(|name| name.as_str()) {
-            if !name.is_empty() {
+    if names.is_empty()
+        && let Some(name) = value.get("fileName").and_then(|name| name.as_str())
+            && !name.is_empty() {
                 names.push(name.to_string());
             }
-        }
-    }
     names
 }
 

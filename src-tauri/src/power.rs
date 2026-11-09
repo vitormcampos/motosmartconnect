@@ -6,30 +6,7 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HostPower {
-    pub battery: i64,
-    pub charging: bool,
-    pub plugged: bool,
-}
-
-impl HostPower {
-    /// A Mac with no battery is treated as plugged in and full.
-    pub fn on_power() -> Self {
-        Self { battery: 100, charging: false, plugged: true }
-    }
-
-    pub fn line(&self) -> String {
-        let how = if self.charging {
-            "charging"
-        } else if self.plugged {
-            "plugged in"
-        } else {
-            "on battery"
-        };
-        format!("This Mac is at {}% and {how}.", self.battery)
-    }
-}
+pub use crate::platform::HostPower;
 
 pub fn read() -> HostPower {
     unsafe { read_iokit() }.unwrap_or_else(HostPower::on_power)
@@ -51,14 +28,23 @@ unsafe extern "C" {
     fn CFArrayGetCount(array: *const c_void) -> isize;
     fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
     fn CFDictionaryGetValue(dict: *const c_void, key: *const c_void) -> *const c_void;
-    fn CFStringCreateWithCString(allocator: *const c_void, text: *const c_char, encoding: u32) -> *const c_void;
+    fn CFStringCreateWithCString(
+        allocator: *const c_void,
+        text: *const c_char,
+        encoding: u32,
+    ) -> *const c_void;
     fn CFGetTypeID(value: *const c_void) -> usize;
     fn CFNumberGetTypeID() -> usize;
     fn CFBooleanGetTypeID() -> usize;
     fn CFStringGetTypeID() -> usize;
     fn CFNumberGetValue(number: *const c_void, kind: isize, into: *mut c_void) -> bool;
     fn CFBooleanGetValue(value: *const c_void) -> bool;
-    fn CFStringGetCString(value: *const c_void, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
+    fn CFStringGetCString(
+        value: *const c_void,
+        buffer: *mut c_char,
+        size: isize,
+        encoding: u32,
+    ) -> bool;
 }
 
 unsafe fn key(text: &CStr) -> *const c_void {
@@ -90,7 +76,9 @@ unsafe fn flag(dict: *const c_void, name: &CStr) -> bool {
     }
     let value = unsafe { CFDictionaryGetValue(dict, key) };
     unsafe { CFRelease(key) };
-    !value.is_null() && unsafe { CFGetTypeID(value) } == unsafe { CFBooleanGetTypeID() } && unsafe { CFBooleanGetValue(value) }
+    !value.is_null()
+        && unsafe { CFGetTypeID(value) } == unsafe { CFBooleanGetTypeID() }
+        && unsafe { CFBooleanGetValue(value) }
 }
 
 unsafe fn text(dict: *const c_void, name: &CStr) -> Option<String> {
@@ -104,10 +92,19 @@ unsafe fn text(dict: *const c_void, name: &CStr) -> Option<String> {
         return None;
     }
     let mut buffer = [0u8; 64];
-    if !unsafe { CFStringGetCString(value, buffer.as_mut_ptr().cast(), buffer.len() as isize, UTF8) } {
+    if !unsafe {
+        CFStringGetCString(
+            value,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as isize,
+            UTF8,
+        )
+    } {
         return None;
     }
-    CStr::from_bytes_until_nul(&buffer).ok().map(|text| text.to_string_lossy().into_owned())
+    CStr::from_bytes_until_nul(&buffer)
+        .ok()
+        .map(|text| text.to_string_lossy().into_owned())
 }
 
 unsafe fn read_iokit() -> Option<HostPower> {
@@ -143,6 +140,7 @@ unsafe fn read_iokit() -> Option<HostPower> {
             battery,
             charging: unsafe { flag(description, c"Is Charging") },
             plugged: state.as_deref() == Some("AC Power"),
+            battery_available: true,
         });
         break;
     }
@@ -159,8 +157,35 @@ mod tests {
 
     #[test]
     fn the_line_names_each_power_state() {
-        assert_eq!(HostPower { battery: 80, charging: false, plugged: true }.line(), "This Mac is at 80% and plugged in.");
-        assert_eq!(HostPower { battery: 64, charging: true, plugged: true }.line(), "This Mac is at 64% and charging.");
-        assert_eq!(HostPower { battery: 40, charging: false, plugged: false }.line(), "This Mac is at 40% and on battery.");
+        assert_eq!(
+            HostPower {
+                battery: 80,
+                charging: false,
+                plugged: true,
+                battery_available: true
+            }
+            .line(),
+            "This Mac is at 80% and plugged in."
+        );
+        assert_eq!(
+            HostPower {
+                battery: 64,
+                charging: true,
+                plugged: true,
+                battery_available: true
+            }
+            .line(),
+            "This Mac is at 64% and charging."
+        );
+        assert_eq!(
+            HostPower {
+                battery: 40,
+                charging: false,
+                plugged: false,
+                battery_available: true
+            }
+            .line(),
+            "This Mac is at 40% and on battery."
+        );
     }
 }

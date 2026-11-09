@@ -12,11 +12,12 @@ use std::time::Duration;
 use dispatch2::DispatchQueue;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{define_class, msg_send, AnyThread, Message};
+use objc2::{AnyThread, Message, define_class, msg_send};
 use objc2_foundation::{NSData, NSError, NSObject, NSObjectProtocol, NSString};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
+use crate::platform::{WakeOutcome, WakeTarget as Target};
 use crate::protocol;
 
 /// Bluetooth base UUID with the 16-bit ReadyFor service id.
@@ -40,25 +41,12 @@ unsafe extern "C" {
     static CBCentralManagerOptionShowPowerAlertKey: *const AnyObject;
 }
 
-pub struct Target {
-    pub name: String,
-    pub real: Vec<u8>,
-    pub frame: Vec<u8>,
-}
-
 /// Counts from one scan. Safe to share with the worker thread.
 #[derive(Default)]
 pub struct WakeStats {
     pub adverts: std::sync::atomic::AtomicU32,
     pub payloads: std::sync::atomic::AtomicU32,
     pub matched: std::sync::atomic::AtomicU32,
-}
-
-pub struct WakeOutcome {
-    pub names: Vec<String>,
-    pub adverts: u32,
-    pub payloads: u32,
-    pub matched: u32,
 }
 
 enum WakeMsg {
@@ -180,14 +168,21 @@ pub fn nonce_from_service_data(data: &HashMap<Uuid, Vec<u8>>) -> Option<Vec<u8>>
 }
 
 pub fn matching<'a>(nonce: &[u8], targets: &'a [Target]) -> Option<&'a Target> {
-    targets.iter().find(|target| protocol::nonce_matches(nonce, &target.real))
+    targets
+        .iter()
+        .find(|target| protocol::nonce_matches(nonce, &target.real))
 }
 
 /// Scan until a saved phone accepts the invite, or the scan window ends.
 /// Names are the phones that accepted the write.
 pub async fn push_invites(targets: Vec<Target>) -> Result<WakeOutcome, String> {
     if targets.is_empty() {
-        return Ok(WakeOutcome { names: Vec::new(), adverts: 0, payloads: 0, matched: 0 });
+        return Ok(WakeOutcome {
+            names: Vec::new(),
+            adverts: 0,
+            payloads: 0,
+            matched: 0,
+        });
     }
     let (tx, mut rx) = unbounded_channel();
     let stats = std::sync::Arc::new(WakeStats::default());
@@ -240,41 +235,52 @@ pub async fn push_invites(targets: Vec<Target>) -> Result<WakeOutcome, String> {
     Ok(outcome)
 }
 
-fn start_on_main(targets: Vec<Target>, tx: UnboundedSender<WakeMsg>, stats: std::sync::Arc<WakeStats>) {
+fn start_on_main(
+    targets: Vec<Target>,
+    tx: UnboundedSender<WakeMsg>,
+    stats: std::sync::Arc<WakeStats>,
+) {
     stop_on_main();
-    let Ok(delegate) = objc2::exception::catch(std::panic::AssertUnwindSafe(WakeDelegate::new)) else {
+    let Ok(delegate) = objc2::exception::catch(std::panic::AssertUnwindSafe(WakeDelegate::new))
+    else {
         let _ = tx.send(WakeMsg::Failed(asleep()));
         return;
     };
     let Some(manager) = manager_with(&delegate) else {
-        let _ = tx.send(WakeMsg::Failed("Bluetooth is not available on this Mac.".into()));
+        let _ = tx.send(WakeMsg::Failed(
+            "Bluetooth is not available on this Mac.".into(),
+        ));
         return;
     };
     let Some(service_uuid) = cbuuid(READYFOR_TEXT) else {
-        let _ = tx.send(WakeMsg::Failed("Bluetooth is not available on this Mac.".into()));
+        let _ = tx.send(WakeMsg::Failed(
+            "Bluetooth is not available on this Mac.".into(),
+        ));
         return;
     };
     let (Some(invite_uuid), Some(notify_uuid)) = (cbuuid(INVITE_TEXT), cbuuid(NOTIFY_TEXT)) else {
-        let _ = tx.send(WakeMsg::Failed("Bluetooth is not available on this Mac.".into()));
+        let _ = tx.send(WakeMsg::Failed(
+            "Bluetooth is not available on this Mac.".into(),
+        ));
         return;
     };
     let state: isize = unsafe { msg_send![&*manager, state] };
     *slot() = Some(Session {
-            tx,
-            targets,
-            delegate,
-            manager,
-            service_uuid,
-            invite_uuid,
-            notify_uuid,
-            peripheral: None,
-            active_name: String::new(),
-            active_frame: Vec::new(),
-            scanning: false,
-            wrote: false,
-            seen: Vec::new(),
-            stats,
-        });
+        tx,
+        targets,
+        delegate,
+        manager,
+        service_uuid,
+        invite_uuid,
+        notify_uuid,
+        peripheral: None,
+        active_name: String::new(),
+        active_frame: Vec::new(),
+        scanning: false,
+        wrote: false,
+        seen: Vec::new(),
+        stats,
+    });
     on_state(state);
 }
 
@@ -311,7 +317,8 @@ fn bool_option(key_ptr: *const AnyObject, on: bool) -> Option<Retained<AnyObject
     let number = AnyClass::get(c"NSNumber")?;
     let value: Retained<AnyObject> = unsafe { msg_send![number, numberWithBool: on] };
     let dict = AnyClass::get(c"NSDictionary")?;
-    let options: Retained<AnyObject> = unsafe { msg_send![dict, dictionaryWithObject: &*value, forKey: key] };
+    let options: Retained<AnyObject> =
+        unsafe { msg_send![dict, dictionaryWithObject: &*value, forKey: key] };
     Some(options)
 }
 
@@ -343,45 +350,72 @@ fn on_state(state: isize) {
 }
 
 fn begin_scan() {
-    let Some(session) = slot().as_mut() else { return };
+    let Some(session) = slot().as_mut() else {
+        return;
+    };
     if session.scanning || session.peripheral.is_some() {
         return;
     }
     let class = AnyClass::get(c"NSArray");
     let Some(class) = class else { return };
-    let services: Retained<AnyObject> = unsafe { msg_send![class, arrayWithObject: &*session.service_uuid] };
+    let services: Retained<AnyObject> =
+        unsafe { msg_send![class, arrayWithObject: &*session.service_uuid] };
     let manager = session.manager.clone();
     session.scanning = true;
     // The wake nonce is often only in the scan response. Without duplicates,
     // CoreBluetooth delivers the first packet and hides that response.
-    let options = bool_option(unsafe { CBCentralManagerScanOptionAllowDuplicatesKey }, true);
+    let options = bool_option(
+        unsafe { CBCentralManagerScanOptionAllowDuplicatesKey },
+        true,
+    );
     unsafe {
         let _: () = match &options {
-            Some(options) => msg_send![&*manager, scanForPeripheralsWithServices: &*services, options: &**options],
-            None => msg_send![&*manager, scanForPeripheralsWithServices: &*services, options: std::ptr::null::<AnyObject>()],
+            Some(options) => {
+                msg_send![&*manager, scanForPeripheralsWithServices: &*services, options: &**options]
+            }
+            None => {
+                msg_send![&*manager, scanForPeripheralsWithServices: &*services, options: std::ptr::null::<AnyObject>()]
+            }
         };
     }
 }
 
 fn on_discover(peripheral: &AnyObject, advert: &AnyObject) {
     if let Some(session) = slot().as_ref() {
-        session.stats.adverts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        session
+            .stats
+            .adverts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    let Some(bytes) = service_payload(advert) else { return };
+    let Some(bytes) = service_payload(advert) else {
+        return;
+    };
     if bytes.len() <= 15 {
         return;
     }
     let nonce = &bytes[bytes.len() - 16..];
     let ident = peripheral_id(peripheral);
-    let Some(session) = slot().as_mut() else { return };
-    session.stats.payloads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Some(session) = slot().as_mut() else {
+        return;
+    };
+    session
+        .stats
+        .payloads
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if session.seen.iter().any(|seen| seen == &ident) || session.peripheral.is_some() {
         return;
     }
-    let Some(index) = session.targets.iter().position(|target| protocol::nonce_matches(nonce, &target.real)) else {
+    let Some(index) = session
+        .targets
+        .iter()
+        .position(|target| protocol::nonce_matches(nonce, &target.real))
+    else {
         return;
     };
-    session.stats.matched.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    session
+        .stats
+        .matched
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let target = session.targets.remove(index);
     session.active_name = target.name;
     session.active_frame = target.frame;
@@ -389,7 +423,7 @@ fn on_discover(peripheral: &AnyObject, advert: &AnyObject) {
     session.peripheral = Some(peripheral.retain());
     let manager = session.manager.clone();
     let delegate = session.delegate.clone();
-        unsafe {
+    unsafe {
         let _: () = msg_send![&*manager, stopScan];
         let _: () = msg_send![peripheral, setDelegate: &*delegate];
         let _: () = msg_send![&*manager, connectPeripheral: peripheral, options: std::ptr::null::<AnyObject>()];
@@ -397,9 +431,11 @@ fn on_discover(peripheral: &AnyObject, advert: &AnyObject) {
 }
 
 fn on_connected(peripheral: &AnyObject) {
-    let Some(session) = slot().as_ref() else { return };
+    let Some(session) = slot().as_ref() else {
+        return;
+    };
     let service = session.service_uuid.clone();
-        let class = AnyClass::get(c"NSArray");
+    let class = AnyClass::get(c"NSArray");
     let Some(class) = class else { return };
     let services: Retained<AnyObject> = unsafe { msg_send![class, arrayWithObject: &*service] };
     unsafe {
@@ -424,16 +460,22 @@ fn discover_characteristics(peripheral: &AnyObject) {
 }
 
 fn write_invite(peripheral: &AnyObject, service: &AnyObject) {
-    let Some(session) = slot().as_mut() else { return };
+    let Some(session) = slot().as_mut() else {
+        return;
+    };
     if session.wrote {
         return;
     }
-    let characteristics: Option<Retained<AnyObject>> = unsafe { msg_send![service, characteristics] };
-    let Some(characteristics) = characteristics else { return };
+    let characteristics: Option<Retained<AnyObject>> =
+        unsafe { msg_send![service, characteristics] };
+    let Some(characteristics) = characteristics else {
+        return;
+    };
     let count: usize = unsafe { msg_send![&*characteristics, count] };
     let mut invite: Option<Retained<AnyObject>> = None;
     for index in 0..count {
-        let characteristic: Retained<AnyObject> = unsafe { msg_send![&*characteristics, objectAtIndex: index] };
+        let characteristic: Retained<AnyObject> =
+            unsafe { msg_send![&*characteristics, objectAtIndex: index] };
         let uuid: Option<Retained<AnyObject>> = unsafe { msg_send![&*characteristic, UUID] };
         let Some(uuid) = uuid else { continue };
         let is_invite: bool = unsafe { msg_send![&*uuid, isEqual: &*session.invite_uuid] };
@@ -467,9 +509,12 @@ fn write_invite(peripheral: &AnyObject, service: &AnyObject) {
 
 fn on_wrote(peripheral: &AnyObject, characteristic: &AnyObject, failed: bool) {
     let name = {
-        let Some(session) = slot().as_ref() else { return };
+        let Some(session) = slot().as_ref() else {
+            return;
+        };
         let uuid: Option<Retained<AnyObject>> = unsafe { msg_send![characteristic, UUID] };
-        let is_invite = uuid.is_some_and(|uuid| unsafe { msg_send![&*uuid, isEqual: &*session.invite_uuid] });
+        let is_invite =
+            uuid.is_some_and(|uuid| unsafe { msg_send![&*uuid, isEqual: &*session.invite_uuid] });
         if !is_invite {
             return;
         }
@@ -490,14 +535,18 @@ fn on_wrote(peripheral: &AnyObject, characteristic: &AnyObject, failed: bool) {
 
 fn uuid_text(object: &AnyObject) -> String {
     let uuid: Option<Retained<AnyObject>> = unsafe { msg_send![object, UUID] };
-    let Some(uuid) = uuid else { return String::new() };
+    let Some(uuid) = uuid else {
+        return String::new();
+    };
     let text: Option<Retained<NSString>> = unsafe { msg_send![&*uuid, UUIDString] };
     text.map(|text| text.to_string()).unwrap_or_default()
 }
 
 fn give_up_peripheral(peripheral: &AnyObject) {
     let ident = peripheral_id(peripheral);
-    let Some(session) = slot().as_mut() else { return };
+    let Some(session) = slot().as_mut() else {
+        return;
+    };
     session.seen.push(ident);
     session.peripheral = None;
     session.active_frame.clear();
@@ -505,7 +554,7 @@ fn give_up_peripheral(peripheral: &AnyObject) {
     session.wrote = false;
     let manager = session.manager.clone();
     let resume = !session.targets.is_empty();
-        unsafe {
+    unsafe {
         let _: () = msg_send![&*manager, cancelPeripheralConnection: peripheral];
     }
     if resume {
@@ -515,7 +564,9 @@ fn give_up_peripheral(peripheral: &AnyObject) {
 
 fn peripheral_id(peripheral: &AnyObject) -> String {
     let ident: Option<Retained<AnyObject>> = unsafe { msg_send![peripheral, identifier] };
-    let Some(ident) = ident else { return String::new() };
+    let Some(ident) = ident else {
+        return String::new();
+    };
     let text: Option<Retained<NSString>> = unsafe { msg_send![&*ident, UUIDString] };
     text.map(|text| text.to_string()).unwrap_or_default()
 }
@@ -624,15 +675,17 @@ mod tests {
         data.insert(READYFOR, blob);
         let found = nonce_from_service_data(&data).expect("nonce");
         assert!(protocol::nonce_matches(&found, real));
-        assert!(matching(
-            &found,
-            &[Target {
-                name: "Edge".into(),
-                real: real.to_vec(),
-                frame: vec![9],
-            }]
-        )
-        .is_some());
+        assert!(
+            matching(
+                &found,
+                &[Target {
+                    name: "Edge".into(),
+                    real: real.to_vec(),
+                    frame: vec![9],
+                }]
+            )
+            .is_some()
+        );
     }
 
     #[test]

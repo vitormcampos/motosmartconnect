@@ -83,14 +83,20 @@ pub fn save(identity: &Identity, phones: &[PhoneRecord]) -> Result<()> {
         phones: phones.to_vec(),
     };
     let text = serde_json::to_string_pretty(&disk)?;
-    let mut file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)?;
     file.write_all(text.as_bytes())?;
     Ok(())
 }
 
 fn decode(text: &str) -> Result<(Identity, Vec<PhoneRecord>)> {
     let disk: Disk = serde_json::from_str(text)?;
-    let real_bytes = protocol::b64_decode(&disk.real_device_id).context("real device id is not base64")?;
+    let real_bytes =
+        protocol::b64_decode(&disk.real_device_id).context("real device id is not base64")?;
     let (fp_b64, fp_hex) = fingerprint_of_pem(&disk.cert_pem)?;
     let identity = Identity {
         real_id: disk.real_device_id,
@@ -113,7 +119,9 @@ pub fn create_new(device_name: &str) -> Result<(Identity, Vec<PhoneRecord>)> {
     // Ring can generate P-256, which rustls then presents on the listener.
     let key = KeyPair::generate()?;
     let mut params = CertificateParams::new(vec!["SmartConnect".to_string()])?;
-    params.distinguished_name.push(DnType::CommonName, "Smart Connect");
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "Smart Connect");
     params.not_before = time::OffsetDateTime::now_utc() - Duration::days(1);
     params.not_after = time::OffsetDateTime::now_utc() + Duration::days(365 * 20);
     let cert = params.self_signed(&key)?;
@@ -170,17 +178,5 @@ mod tests {
 }
 
 fn computer_name() -> String {
-    if let Ok(output) = std::process::Command::new("scutil").args(["--get", "ComputerName"]).output() {
-        if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                return name;
-            }
-        }
-    }
-    hostname::get()
-        .ok()
-        .and_then(|value| value.into_string().ok())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Mac".to_string())
+    crate::platform::default_computer_name()
 }

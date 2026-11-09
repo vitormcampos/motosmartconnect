@@ -1,19 +1,19 @@
 //! Pairing session: QR token, control socket, discovery invites, and mDNS.
 
 use crate::desk::{self, Desk, Effect, FileView};
-use crate::mirror::Mirror;
 use crate::fex;
-use crate::nfs;
+use crate::mirror::Mirror;
 use crate::net::{self, phone_client_config};
+use crate::nfs;
 use crate::protocol::{self, OpenedFrame, TOKEN_TTL_SECS};
 use crate::sms::{self, Sms};
 use crate::store::{self, Identity, PhoneRecord};
 use anyhow::{Context, Result};
-use rustls::pki_types::ServerName;
 use futures_util::{SinkExt, StreamExt};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use rustls::pki_types::ServerName;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -23,10 +23,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use tokio_rustls::TlsConnector;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{accept_hdr_async_with_config, client_async};
 
 const MDNS_TYPE: &str = "_readyformdns._tcp.local.";
@@ -107,13 +107,14 @@ struct Inner {
     wallpaper_md5: String,
     wallpaper_url: String,
     wallpaper_asked: bool,
-    reported_power: Option<crate::power::HostPower>,
+    reported_power: Option<crate::platform::HostPower>,
     sms: Sms,
 }
 
 struct Shared {
     inner: Mutex<Inner>,
     app: AppHandle,
+    platform: crate::platform::PlatformServices,
     next_msg: AtomicU64,
     next_session: AtomicU64,
     mdns: Mutex<Option<ServiceDaemon>>,
@@ -146,6 +147,8 @@ enum Step {
 impl Engine {
     pub fn new(app: AppHandle) -> Result<Self> {
         net::install_crypto();
+        let platform = crate::platform::PlatformServices::new(app.clone());
+        platform.initialize();
         let (identity, phones) = store::load().context("loading the saved identity")?;
         let nonce = protocol::fresh_nonce(&identity.real_bytes);
         let engine = Self {
@@ -179,6 +182,7 @@ impl Engine {
                     sms: Sms::new(),
                 }),
                 app,
+                platform,
                 next_msg: AtomicU64::new(1),
                 next_session: AtomicU64::new(1),
                 mdns: Mutex::new(None),
@@ -206,7 +210,10 @@ impl Engine {
         };
         let (cert_pem, key_pem) = {
             let guard = self.lock();
-            (guard.identity.cert_pem.clone(), guard.identity.key_pem.clone())
+            (
+                guard.identity.cert_pem.clone(),
+                guard.identity.key_pem.clone(),
+            )
         };
         let server = match net::server_config(&cert_pem, &key_pem) {
             Ok(config) => config,
@@ -222,14 +229,20 @@ impl Engine {
             guard.error = None;
         }
         let client = Arc::new(phone_client_config());
-        *self.shared.client_tls.lock().unwrap_or_else(|err| err.into_inner()) = Some(client);
+        *self
+            .shared
+            .client_tls
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = Some(client);
         self.start_mdns();
         {
             self.lock().listening = true;
         }
         let only_loopback = self.lock().ips.iter().all(|ip| ip.starts_with("127."));
         if only_loopback {
-            self.note("No local network address yet. The code will work after this Mac joins Wi-Fi.");
+            self.note(
+                "No local network address yet. The code will work after this Mac joins Wi-Fi.",
+            );
         }
         self.note(format!("Listening on port {port}."));
         let start_pairing = {
@@ -344,7 +357,7 @@ impl Engine {
         self.lock().wallpaper_asked = true;
         match state {
             Some(state) => self.note(format!("Asked the phone for its wallpaper (state {state}). Allow it on the phone if it asks.")),
-            None => self.note("Asked the phone for its wallpaper. Allow it on the phone if it asks.".to_string()),
+            None => self.note("Asked the phone for its wallpaper. Allow it on the phone if it asks."),
         }
     }
 
@@ -405,7 +418,12 @@ impl Engine {
             sessions: guard.desk.sessions(),
             stream: guard.desk.visible(),
             cross: guard.desk.cross(),
-            lan_ip: guard.ips.iter().find(|ip| *ip != "127.0.0.1").cloned().unwrap_or_default(),
+            lan_ip: guard
+                .ips
+                .iter()
+                .find(|ip| *ip != "127.0.0.1")
+                .cloned()
+                .unwrap_or_default(),
             messages: guard.sms.view(),
         }
     }
@@ -442,7 +460,11 @@ impl Engine {
         }
         self.rotate_token();
         self.refresh_mdns();
-        self.note(if already { "New code is ready." } else { "Pairing code is on." });
+        self.note(if already {
+            "New code is ready."
+        } else {
+            "Pairing code is on."
+        });
         self.publish();
         self.shared.pair_wake.notify_waiters();
     }
@@ -451,7 +473,9 @@ impl Engine {
     pub fn end_pairing(&self) {
         let changed = {
             let mut guard = self.lock();
-            let changed = guard.pairing || !guard.qr_svg.is_empty() || guard.tokens.iter().any(|token| token.pairing);
+            let changed = guard.pairing
+                || !guard.qr_svg.is_empty()
+                || guard.tokens.iter().any(|token| token.pairing);
             guard.pairing = false;
             guard.tokens.retain(|token| !token.pairing);
             guard.qr_svg.clear();
@@ -545,8 +569,12 @@ impl Engine {
         }
     }
 
-    async fn handle_control<S>(&self, websocket: tokio_tungstenite::WebSocketStream<S>, peer: SocketAddr, local: Option<IpAddr>)
-    where
+    async fn handle_control<S>(
+        &self,
+        websocket: tokio_tungstenite::WebSocketStream<S>,
+        peer: SocketAddr,
+        local: Option<IpAddr>,
+    ) where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
         let (mut sink, mut stream) = websocket.split();
@@ -576,14 +604,16 @@ impl Engine {
             };
             match message {
                 Message::Text(text) => {
-                    let step = self.on_control_text(&text, &tx, session, &exchange_sent, &mut phone_id);
+                    let step =
+                        self.on_control_text(&text, &tx, session, &exchange_sent, &mut phone_id);
                     if matches!(step, Step::Drop) {
                         break;
                     }
                 }
                 Message::Binary(bytes) => {
                     if let Ok(text) = std::str::from_utf8(&bytes) {
-                        let step = self.on_control_text(text, &tx, session, &exchange_sent, &mut phone_id);
+                        let step =
+                            self.on_control_text(text, &tx, session, &exchange_sent, &mut phone_id);
                         if matches!(step, Step::Drop) {
                             break;
                         }
@@ -609,7 +639,11 @@ impl Engine {
             }
             let name = {
                 let guard = self.lock();
-                guard.phones.iter().find(|phone| &phone.real_id == real_id).map(|phone| phone.name.clone())
+                guard
+                    .phones
+                    .iter()
+                    .find(|phone| &phone.real_id == real_id)
+                    .map(|phone| phone.name.clone())
             };
             if let Some(name) = name {
                 self.note(format!("{name} disconnected."));
@@ -645,15 +679,26 @@ impl Engine {
             Ok(value) => value,
             Err(_) => {
                 if text.len() > 2000 {
-                    self.note(format!("A phone message of {} bytes could not be read.", text.len()));
+                    self.note(format!(
+                        "A phone message of {} bytes could not be read.",
+                        text.len()
+                    ));
                 }
                 return Step::Continue;
             }
         };
-        let service = message.get("serviceId").and_then(Value::as_i64).unwrap_or(0);
-        let src = message.get("srcServiceId").and_then(Value::as_i64).unwrap_or(service);
+        let service = message
+            .get("serviceId")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let src = message
+            .get("srcServiceId")
+            .and_then(Value::as_i64)
+            .unwrap_or(service);
         let data = protocol::data_object(&message).unwrap_or_else(|| message.clone());
-        let cmd = protocol::json_cmd(&data).or_else(|| protocol::json_cmd(&message)).unwrap_or(-1);
+        let cmd = protocol::json_cmd(&data)
+            .or_else(|| protocol::json_cmd(&message))
+            .unwrap_or(-1);
         if let Some((raw, md5)) = find_wallpaper(&message).or_else(|| find_wallpaper(&data)) {
             self.store_wallpaper(&raw, &md5);
         } else if service == 25 && cmd == 1 {
@@ -661,7 +706,11 @@ impl Engine {
         } else if service == 25 && text.len() > 4000 {
             self.note(format!("Phone status command {cmd} had no picture."));
         }
-        let routed = if service == 26 || src == 26 { 26 } else { service };
+        let routed = if service == 26 || src == 26 {
+            26
+        } else {
+            service
+        };
         if is_feature(routed) {
             let effects = self.lock().desk.handle(routed, &data);
             self.apply_effects(effects, Some(tx));
@@ -674,7 +723,10 @@ impl Engine {
         }
 
         if text.len() > 4000 {
-            self.note(format!("Service {service} command {cmd} ({len} bytes).", len = text.len()));
+            self.note(format!(
+                "Service {service} command {cmd} ({len} bytes).",
+                len = text.len()
+            ));
         }
         if service == 22 && cmd == 1 {
             self.note("Lock requested.");
@@ -715,13 +767,21 @@ impl Engine {
         phone_id: &mut Option<String>,
     ) -> Step {
         let device = &data["device"];
-        let real_id = device["realDeviceId"].as_str().unwrap_or("").trim().to_string();
+        let real_id = device["realDeviceId"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if real_id.is_empty() {
             self.note("A phone hello had no stable id.");
             return Step::Drop;
         }
         let token = data["token"].as_str().unwrap_or("");
-        let known = self.lock().phones.iter().any(|phone| phone.real_id == real_id);
+        let known = self
+            .lock()
+            .phones
+            .iter()
+            .any(|phone| phone.real_id == real_id);
         if !self.token_matches(token) && !known {
             self.note("Rejected a connection with an unknown code.");
             return Step::Drop;
@@ -732,14 +792,20 @@ impl Engine {
         let our_key = self.pair_key_for(&real_id);
         {
             let mut guard = self.lock();
-            if let Some(phone) = guard.phones.iter_mut().find(|phone| phone.real_id == real_id) {
+            if let Some(phone) = guard
+                .phones
+                .iter_mut()
+                .find(|phone| phone.real_id == real_id)
+            {
                 phone.name = name.to_string();
                 phone.user_disconnected = false;
                 if let Some(key) = &phone_key {
                     phone.phone_key = Some(key.clone());
                 }
             } else {
-                guard.pending_names.insert(real_id.clone(), name.to_string());
+                guard
+                    .pending_names
+                    .insert(real_id.clone(), name.to_string());
                 if let Some(key) = phone_key.clone() {
                     guard.pending_keys.insert(format!("phone:{real_id}"), key);
                 }
@@ -767,7 +833,7 @@ impl Engine {
             guard.sms.on_phone(&real_id);
             drop(guard);
             self.apply_effects(closed, Some(tx));
-            let power = crate::power::read();
+            let power = self.shared.platform.host_power();
             let mut guard = self.lock();
             guard.reported_power = Some(power);
             protocol::status_message_for(
@@ -778,12 +844,14 @@ impl Engine {
                 power,
             )
         };
-        if tx.send(Message::Text(verify.into())).is_err() || tx.send(Message::Text(status.into())).is_err() {
+        if tx.send(Message::Text(verify.into())).is_err()
+            || tx.send(Message::Text(status.into())).is_err()
+        {
             return Step::Drop;
         }
         self.lock().wallpaper_asked = false;
         self.note(format!("{name} connected."));
-        self.note(crate::power::read().line());
+        self.note(self.shared.platform.host_power().line());
         self.publish();
 
         let engine = self.clone();
@@ -800,9 +868,15 @@ impl Engine {
     fn on_phone_key(&self, data: &Value, phone_id: &Option<String>) {
         let Some(real_id) = phone_id else { return };
         let device = &data["device"];
-        let Some(key) = non_empty_str(device.get("key")) else { return };
+        let Some(key) = non_empty_str(device.get("key")) else {
+            return;
+        };
         let mut guard = self.lock();
-        if let Some(phone) = guard.phones.iter_mut().find(|phone| &phone.real_id == real_id) {
+        if let Some(phone) = guard
+            .phones
+            .iter_mut()
+            .find(|phone| &phone.real_id == real_id)
+        {
             phone.phone_key = Some(key);
         } else {
             guard.pending_keys.insert(format!("phone:{real_id}"), key);
@@ -860,7 +934,11 @@ impl Engine {
 
     fn remember_phone(&self, real_id: &str, name: &str, our_key: &str, phone_key: Option<String>) {
         let mut guard = self.lock();
-        if let Some(phone) = guard.phones.iter_mut().find(|phone| phone.real_id == real_id) {
+        if let Some(phone) = guard
+            .phones
+            .iter_mut()
+            .find(|phone| phone.real_id == real_id)
+        {
             if !name.is_empty() {
                 phone.name = name.to_string();
             }
@@ -872,7 +950,11 @@ impl Engine {
         } else {
             guard.phones.push(PhoneRecord {
                 real_id: real_id.to_string(),
-                name: if name.is_empty() { "Phone".into() } else { name.into() },
+                name: if name.is_empty() {
+                    "Phone".into()
+                } else {
+                    name.into()
+                },
                 our_key: our_key.to_string(),
                 phone_key,
                 user_disconnected: false,
@@ -889,8 +971,11 @@ impl Engine {
         }
     }
 
-    async fn handle_discovery<S>(&self, mut websocket: tokio_tungstenite::WebSocketStream<S>, peer: SocketAddr)
-    where
+    async fn handle_discovery<S>(
+        &self,
+        mut websocket: tokio_tungstenite::WebSocketStream<S>,
+        peer: SocketAddr,
+    ) where
         S: AsyncRead + AsyncWrite + Unpin,
     {
         self.note(format!("Discovery connection from {peer}."));
@@ -900,10 +985,10 @@ impl Engine {
                 Err(_) => break,
             };
             if let Message::Binary(frame) = message {
-                if let Some(reply) = self.reply_to_trigger(&frame) {
-                    if websocket.send(Message::Binary(reply.into())).await.is_err() {
-                        break;
-                    }
+                if let Some(reply) = self.reply_to_trigger(&frame)
+                    && websocket.send(Message::Binary(reply.into())).await.is_err()
+                {
+                    break;
                 }
             } else if matches!(message, Message::Close(_)) {
                 break;
@@ -934,16 +1019,19 @@ impl Engine {
         }
         let plain = match protocol::open_frame(&phone.our_key, frame) {
             Ok(OpenedFrame::Payload(plain)) => plain,
-            Ok(OpenedFrame::CannotDecrypt) => match phone.phone_key.as_deref() {
-                Some(key) => match protocol::open_frame(key, frame) {
+            Ok(OpenedFrame::CannotDecrypt) => {
+                let key = phone.phone_key.as_deref()?;
+                match protocol::open_frame(key, frame) {
                     Ok(OpenedFrame::Payload(plain)) => plain,
                     _ => {
-                        self.note(format!("Could not decrypt a discovery frame from {}.", phone.name));
+                        self.note(format!(
+                            "Could not decrypt a discovery frame from {}.",
+                            phone.name
+                        ));
                         return None;
                     }
-                },
-                None => return None,
-            },
+                }
+            }
             _ => return None,
         };
         let value: Value = serde_json::from_slice(&plain).unwrap_or(Value::Null);
@@ -986,7 +1074,9 @@ impl Engine {
                 self.refresh_mdns();
                 self.spawn_browse();
             }
-            Err(err) => self.note(format!("Local discovery is off ({err}). Scanning the code still works.")),
+            Err(err) => self.note(format!(
+                "Local discovery is off ({err}). Scanning the code still works."
+            )),
         }
     }
 
@@ -1022,7 +1112,14 @@ impl Engine {
             ("fp", fp_hex.as_str()),
         ];
         let addresses: Vec<IpAddr> = ips.iter().filter_map(|ip| ip.parse().ok()).collect();
-        let info = match ServiceInfo::new(MDNS_TYPE, &instance, "motosmartconnect.local.", addresses.as_slice(), port, &properties[..]) {
+        let info = match ServiceInfo::new(
+            MDNS_TYPE,
+            &instance,
+            "motosmartconnect.local.",
+            addresses.as_slice(),
+            port,
+            &properties[..],
+        ) {
             Ok(info) => info,
             Err(err) => {
                 self.note(format!("Could not publish on the local network: {err}"));
@@ -1072,7 +1169,7 @@ impl Engine {
             })
     }
 
-    fn wake_targets(&self) -> Vec<crate::wake::Target> {
+    fn wake_targets(&self) -> Vec<crate::platform::WakeTarget> {
         let pending: Vec<(String, Vec<u8>, String)> = {
             let guard = self.lock();
             if guard.port == 0 {
@@ -1094,7 +1191,7 @@ impl Engine {
             .into_iter()
             .filter_map(|(name, real, key)| {
                 let frame = self.sealed_invite(&key)?;
-                Some(crate::wake::Target { name, real, frame })
+                Some(crate::platform::WakeTarget { name, real, frame })
             })
             .collect()
     }
@@ -1137,7 +1234,7 @@ impl Engine {
                 wall = SystemTime::now();
                 mono = Instant::now();
                 if wall_delta > mono_delta + Duration::from_secs(8) {
-                    engine.note("This Mac woke up. Looking for your phone.");
+                    engine.note("This computer woke up. Looking for your phone.");
                     engine.publish();
                     next_attempt = Instant::now();
                     gap = Duration::from_secs(1);
@@ -1156,11 +1253,11 @@ impl Engine {
                 }
                 let targets = engine.wake_targets();
                 let result = if targets.is_empty() {
-                    Ok(crate::wake::WakeOutcome { names: Vec::new(), adverts: 0, payloads: 0, matched: 0 })
+                    Ok(crate::platform::WakeOutcome::default())
                 } else {
                     engine.note("Waking your phone over Bluetooth.");
                     engine.publish();
-                    crate::wake::push_invites(targets).await
+                    engine.shared.platform.push_wake_invites(targets).await
                 };
                 engine.shared.wake_busy.store(false, Ordering::Release);
                 match result {
@@ -1191,7 +1288,7 @@ impl Engine {
                     }
                     Err(err) => {
                         if !miss_noted {
-                            engine.note(err);
+                            engine.note(err.to_string());
                             engine.publish();
                             miss_noted = true;
                         }
@@ -1239,7 +1336,9 @@ impl Engine {
         if fp.eq_ignore_ascii_case(&own_fp) || device_id == own_nonce {
             return;
         }
-        let Some(prefix) = protocol::b64_decode(device_id) else { return };
+        let Some(prefix) = protocol::b64_decode(device_id) else {
+            return;
+        };
         let phone = {
             let guard = self.lock();
             guard.phones.iter().find_map(|phone| {
@@ -1251,7 +1350,12 @@ impl Engine {
         if phone.user_disconnected || self.lock().senders.contains_key(&phone.real_id) {
             return;
         }
-        if self.lock().last_invite.get(&phone.real_id).is_some_and(|at| at.elapsed() < INVITE_GAP) {
+        if self
+            .lock()
+            .last_invite
+            .get(&phone.real_id)
+            .is_some_and(|at| at.elapsed() < INVITE_GAP)
+        {
             return;
         }
         let port = info.get_port();
@@ -1264,7 +1368,9 @@ impl Engine {
         if port == 0 {
             return;
         }
-        self.lock().last_invite.insert(phone.real_id.clone(), Instant::now());
+        self.lock()
+            .last_invite
+            .insert(phone.real_id.clone(), Instant::now());
         self.note(format!("Calling {} at {ip}:{port}.", phone.name));
         if let Err(err) = self.push_invite(ip, port, &phone.our_key).await {
             self.note(format!("Call to {} failed: {err}", phone.name));
@@ -1314,7 +1420,11 @@ impl Engine {
                 guard.port.max(1),
                 &guard.ips,
             );
-            guard.tokens.push(LiveToken { value: token, expires, pairing: true });
+            guard.tokens.push(LiveToken {
+                value: token,
+                expires,
+                pairing: true,
+            });
             guard.qr_expires = Some(expires);
             payload
         };
@@ -1343,7 +1453,10 @@ impl Engine {
             return false;
         }
         let now = Instant::now();
-        self.lock().tokens.iter().any(|item| item.expires > now && protocol::tokens_equal(&item.value, token))
+        self.lock()
+            .tokens
+            .iter()
+            .any(|item| item.expires > now && protocol::tokens_equal(&item.value, token))
     }
 
     fn pair_key_for(&self, real_id: &str) -> String {
@@ -1361,7 +1474,11 @@ impl Engine {
 
     fn mark_user_disconnected(&self, real_id: &str) {
         let mut guard = self.lock();
-        if let Some(phone) = guard.phones.iter_mut().find(|phone| phone.real_id == real_id) {
+        if let Some(phone) = guard
+            .phones
+            .iter_mut()
+            .find(|phone| phone.real_id == real_id)
+        {
             phone.user_disconnected = true;
         }
         let identity = guard.identity.clone();
@@ -1373,18 +1490,8 @@ impl Engine {
     fn lock_screen(&self) {
         let engine = self.clone();
         tokio::task::spawn_blocking(move || {
-            let result = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg("tell application \"System Events\" to key code 12 using {control down, command down}")
-                .output();
-            match result {
-                Ok(output) if output.status.success() => engine.note("Screen locked."),
-                Ok(output) => {
-                    let detail = String::from_utf8_lossy(&output.stderr);
-                    engine.note(format!(
-                        "Could not lock the screen. Allow this app to control System Events in Privacy & Security. {detail}"
-                    ));
-                }
+            match engine.shared.platform.lock_session() {
+                Ok(()) => engine.note("Screen locked."),
                 Err(err) => engine.note(format!("Could not lock the screen: {err}")),
             }
             engine.publish();
@@ -1490,7 +1597,10 @@ impl Engine {
         };
         let name = parts.last().cloned().unwrap_or_default();
         let saved = write_phone_file(&name, &bytes).map_err(|err| err.to_string())?;
-        self.lock().desk.store_files(vec![FileView { name, path: saved.clone() }]);
+        self.lock().desk.store_files(vec![FileView {
+            name,
+            path: saved.clone(),
+        }]);
         self.note("Saved a file from the phone.");
         self.publish();
         Ok(saved)
@@ -1512,7 +1622,10 @@ impl Engine {
             if left.is_zero() {
                 return Err("The phone did not open its folders. Unlock it and keep Smart Connect in front.".into());
             }
-            if tokio::time::timeout(left, self.shared.share_ready.notified()).await.is_err() {
+            if tokio::time::timeout(left, self.shared.share_ready.notified())
+                .await
+                .is_err()
+            {
                 return Err("The phone did not open its folders. Unlock it and keep Smart Connect in front.".into());
             }
             let guard = self.lock();
@@ -1530,8 +1643,16 @@ impl Engine {
             .max_by_key(|(_, (session, _))| *session)
             .and_then(|(id, _)| guard.peers.get(id).copied())
             .ok_or_else(|| "Connect the phone first.".to_string())?;
-        let share = guard.desk.phone_share().ok_or_else(|| "The phone did not open its folders.".to_string())?;
-        Ok((ip, share, guard.identity.cert_pem.clone(), guard.identity.key_pem.clone()))
+        let share = guard
+            .desk
+            .phone_share()
+            .ok_or_else(|| "The phone did not open its folders.".to_string())?;
+        Ok((
+            ip,
+            share,
+            guard.identity.cert_pem.clone(),
+            guard.identity.key_pem.clone(),
+        ))
     }
 
     pub fn start_mirror(&self) -> Result<(), String> {
@@ -1550,7 +1671,7 @@ impl Engine {
 
     pub fn start_webcam(&self) -> Result<(), String> {
         self.require_phone()?;
-        crate::cam_publish::ensure();
+        self.shared.platform.ensure_camera_publisher();
         let effects = self.lock().desk.start_webcam()?;
         self.apply_effects(effects, None);
         Ok(())
@@ -1632,12 +1753,14 @@ impl Engine {
         if lower.contains("v=0") || lower.contains("a=candidate") || lower.contains("fingerprint") {
             return;
         }
-        self.note(trimmed.to_string());
+        self.note(trimmed);
         self.publish();
     }
 
     pub fn webrtc_ice(&self, session_id: &str, candidate: &str, label: i64, mid: &str) {
-        let Some(effect) = self.lock().desk.ice(session_id, candidate, label, mid) else { return };
+        let Some(effect) = self.lock().desk.ice(session_id, candidate, label, mid) else {
+            return;
+        };
         self.apply_effects(vec![effect], None);
     }
 
@@ -1654,11 +1777,23 @@ impl Engine {
     }
 
     pub fn cross_show(&self, show: bool) {
-        let Some(effect) = self.lock().desk.cross_show(show) else { return };
+        let Some(effect) = self.lock().desk.cross_show(show) else {
+            return;
+        };
         self.apply_effects(vec![effect], None);
     }
 
-    pub fn send_input(&self, display_id: i64, kind: &str, x: i64, y: i64, key: i64, down: bool, flags: i64, text: &str) {
+    pub fn send_input(
+        &self,
+        display_id: i64,
+        kind: &str,
+        x: i64,
+        y: i64,
+        key: i64,
+        down: bool,
+        flags: i64,
+        text: &str,
+    ) {
         if self.lock().senders.is_empty() {
             return;
         }
@@ -1666,8 +1801,12 @@ impl Engine {
         let y = y.clamp(0, 20_000);
         let data = match kind {
             "move" => json!({ "cmd": 4, "data": { "displayId": display_id, "x": x, "y": y } }),
-            "button" | "wheel" => json!({ "cmd": 5, "data": { "displayId": display_id, "key": key, "x": x, "y": y, "down": down } }),
-            "key" => json!({ "cmd": 3, "data": { "displayId": display_id, "flags": flags, "key": key, "down": down, "metaState": 0 } }),
+            "button" | "wheel" => {
+                json!({ "cmd": 5, "data": { "displayId": display_id, "key": key, "x": x, "y": y, "down": down } })
+            }
+            "key" => {
+                json!({ "cmd": 3, "data": { "displayId": display_id, "flags": flags, "key": key, "down": down, "metaState": 0 } })
+            }
             // Service 16 cmd 9. event is 1 down, 2 move, 0 up. The phone only
             // delivers this on a screen that reported supportTouch.
             "touch" => {
@@ -1707,7 +1846,10 @@ impl Engine {
 
     pub fn app_icons(&self) -> IconPack {
         let guard = self.lock();
-        IconPack { revision: guard.desk.icons_revision, icons: guard.desk.icons() }
+        IconPack {
+            revision: guard.desk.icons_revision,
+            icons: guard.desk.icons(),
+        }
     }
 
     pub fn reveal_file(&self, path: &str) -> Result<(), String> {
@@ -1715,13 +1857,19 @@ impl Engine {
             return Err("That file is not from the phone.".into());
         }
         let root = receive_root();
-        let canonical = PathBuf::from(path).canonicalize().map_err(|_| "That file is no longer there.".to_string())?;
-        let root = root.canonicalize().map_err(|_| "The downloads folder is not available.".to_string())?;
+        let canonical = PathBuf::from(path)
+            .canonicalize()
+            .map_err(|_| "That file is no longer there.".to_string())?;
+        let root = root
+            .canonicalize()
+            .map_err(|_| "The downloads folder is not available.".to_string())?;
         if !canonical.starts_with(&root) {
             return Err("That file is not from the phone.".into());
         }
-        let status = std::process::Command::new("open").arg(&canonical).status().map_err(|err| err.to_string())?;
-        if status.success() { Ok(()) } else { Err("Could not open the file.".into()) }
+        self.shared
+            .platform
+            .open_path(&canonical)
+            .map_err(|err| err.to_string())
     }
 
     fn require_phone(&self) -> Result<(), String> {
@@ -1747,12 +1895,14 @@ impl Engine {
         if self.lock().senders.is_empty() {
             return;
         }
-        let power = crate::power::read();
+        let power = self.shared.platform.host_power();
         let previous = self.lock().reported_power;
         if previous == Some(power) {
             return;
         }
-        let changed_state = previous.is_some_and(|previous| previous.charging != power.charging || previous.plugged != power.plugged);
+        let changed_state = previous.is_some_and(|previous| {
+            previous.charging != power.charging || previous.plugged != power.plugged
+        });
         self.send_status();
         if changed_state {
             self.note(power.line());
@@ -1765,11 +1915,9 @@ impl Engine {
         }
         let engine = self.clone();
         tokio::task::spawn_blocking(move || {
-            let Ok(output) = std::process::Command::new("pbpaste").output() else { return };
-            if !output.status.success() {
+            let Ok(text) = engine.shared.platform.read_clipboard_text() else {
                 return;
-            }
-            let Ok(text) = String::from_utf8(output.stdout) else { return };
+            };
             if text.is_empty() {
                 return;
             }
@@ -1795,29 +1943,55 @@ impl Engine {
                 }
                 Effect::Note(line) => self.note(line),
                 Effect::Publish => publish = true,
-                Effect::Banner { app, title, body, key, pkg, icon_png } => self.show_banner(app, title, body, key, pkg, icon_png),
+                Effect::Banner {
+                    app,
+                    title,
+                    body,
+                    key,
+                    pkg,
+                    icon_png,
+                } => self.show_banner(app, title, body, key, pkg, icon_png),
                 Effect::Paste(text) => self.write_clipboard(text),
                 Effect::Pull(job) => self.spawn_pull(job),
-                Effect::Offer { session_id, sdp, quiet, pkg } => {
+                Effect::Offer {
+                    session_id,
+                    sdp,
+                    quiet,
+                    pkg,
+                } => {
                     // The camera, an app, and the phone screen are answered in a window
                     // from the offer the phone sent. Decoding one here replaces the other.
                     self.remember_offer(&session_id, &sdp, quiet, &pkg);
                     self.emit_rtc("offer", &session_id, &sdp, "", 0, "", quiet, &pkg);
                 }
-                Effect::Ice { session_id, candidate, label, mid } => {
+                Effect::Ice {
+                    session_id,
+                    candidate,
+                    label,
+                    mid,
+                } => {
                     let (_, phone) = self.media_addresses();
                     let candidate = rewrite_mdns(&candidate, &phone);
                     if self.shared.mirror.owns(&session_id) {
                         let mirror = Arc::clone(&self.shared.mirror);
                         tauri::async_runtime::spawn(async move {
-                            mirror.add_remote(&session_id, &candidate, label, &mid).await;
+                            mirror
+                                .add_remote(&session_id, &candidate, label, &mid)
+                                .await;
                         });
                     } else {
                         let pkg = self.lock().desk.session_pkg(&session_id);
                         self.emit_rtc("ice", &session_id, "", &candidate, label, &mid, false, &pkg);
                     }
                 }
-                Effect::Obs { on } => crate::cam_publish::set_open(on),
+                Effect::Obs { on } => {
+                    if let Err(err) = self.shared.platform.set_camera_published(on)
+                        && on
+                    {
+                        self.note(err.to_string());
+                        publish = true;
+                    }
+                }
                 Effect::Closed { session_id } => {
                     let mirror = Arc::clone(&self.shared.mirror);
                     let id = session_id.clone();
@@ -1846,7 +2020,7 @@ impl Engine {
     }
 
     fn send_status(&self) {
-        let power = crate::power::read();
+        let power = self.shared.platform.host_power();
         let text = {
             let mut guard = self.lock();
             guard.reported_power = Some(power);
@@ -1879,12 +2053,20 @@ impl Engine {
 
     fn active_sender(&self) -> Option<mpsc::UnboundedSender<Message>> {
         let guard = self.lock();
-        guard.senders.values().max_by_key(|(id, _)| *id).map(|(_, tx)| tx.clone())
+        guard
+            .senders
+            .values()
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, tx)| tx.clone())
     }
 
     fn active_ip(&self) -> Option<IpAddr> {
         let guard = self.lock();
-        let id = guard.senders.iter().max_by_key(|(_, (session, _))| *session).map(|(id, _)| id.clone());
+        let id = guard
+            .senders
+            .iter()
+            .max_by_key(|(_, (session, _))| *session)
+            .map(|(id, _)| id.clone());
         id.and_then(|id| guard.peers.get(&id).copied())
     }
 
@@ -1917,7 +2099,11 @@ impl Engine {
     }
 
     fn remember_offer(&self, session_id: &str, sdp: &str, quiet: bool, pkg: &str) {
-        let mut offers = self.shared.page_offers.lock().unwrap_or_else(|err| err.into_inner());
+        let mut offers = self
+            .shared
+            .page_offers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         offers.retain(|offer| offer.session_id != session_id);
         offers.push(PageOffer {
             session_id: session_id.to_string(),
@@ -1928,12 +2114,20 @@ impl Engine {
     }
 
     fn forget_offer(&self, session_id: &str) {
-        let mut offers = self.shared.page_offers.lock().unwrap_or_else(|err| err.into_inner());
+        let mut offers = self
+            .shared
+            .page_offers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         offers.retain(|offer| offer.session_id != session_id);
     }
 
     pub fn page_offers(&self) -> Vec<Value> {
-        let offers = self.shared.page_offers.lock().unwrap_or_else(|err| err.into_inner());
+        let offers = self
+            .shared
+            .page_offers
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
         let (lan_ip, phone_ip) = self.media_addresses();
         offers
             .iter()
@@ -1954,7 +2148,17 @@ impl Engine {
             .collect()
     }
 
-    fn emit_rtc(&self, kind: &str, session_id: &str, sdp: &str, candidate: &str, label: i64, mid: &str, quiet: bool, pkg: &str) {
+    fn emit_rtc(
+        &self,
+        kind: &str,
+        session_id: &str,
+        sdp: &str,
+        candidate: &str,
+        label: i64,
+        mid: &str,
+        quiet: bool,
+        pkg: &str,
+    ) {
         let (lan_ip, phone_ip) = self.media_addresses();
         let _ = self.shared.app.emit(
             "rtc",
@@ -1973,12 +2177,19 @@ impl Engine {
         );
     }
 
-    fn show_banner(&self, app: String, title: String, body: String, key: String, pkg: String, icon_png: Option<Vec<u8>>) {
-        crate::banner::bind_app(self.shared.app.clone());
+    fn show_banner(
+        &self,
+        app: String,
+        title: String,
+        body: String,
+        key: String,
+        pkg: String,
+        icon_png: Option<Vec<u8>>,
+    ) {
         let engine = self.clone();
-        crate::banner::show(app, title, body, key, pkg, icon_png, move || {
+        self.shared.platform.show_banner(app, title, body, key, pkg, icon_png, move || {
             if engine.lock().desk.mark_banner_failed() {
-                engine.note("macOS is not showing banners. Allow notifications for Smart Connect in System Settings.");
+                engine.note("Desktop banners are unavailable. Notifications remain available in Smart Connect.");
                 engine.publish();
             }
         });
@@ -1987,18 +2198,10 @@ impl Engine {
     fn write_clipboard(&self, text: String) {
         let engine = self.clone();
         tokio::task::spawn_blocking(move || {
-            let mut child = match std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn() {
-                Ok(child) => child,
-                Err(err) => {
-                    engine.note(format!("Could not write the Mac clipboard ({err})."));
-                    return;
-                }
-            };
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                let _ = stdin.write_all(text.as_bytes());
+            if let Err(err) = engine.shared.platform.write_clipboard_text(&text) {
+                engine.note(format!("Could not write the clipboard: {err}"));
+                engine.publish();
             }
-            let _ = child.wait();
         });
     }
 
@@ -2041,7 +2244,11 @@ impl Engine {
                 }
                 Err(err) => {
                     let _ = std::fs::remove_file(&zip_path);
-                    let what = if job.icons { "app icons" } else { "a file from the phone" };
+                    let what = if job.icons {
+                        "app icons"
+                    } else {
+                        "a file from the phone"
+                    };
                     engine.note(format!("Could not save {what} ({err:#})."));
                     engine.publish();
                 }
@@ -2054,11 +2261,17 @@ impl Engine {
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.shared.inner.lock().unwrap_or_else(|err| err.into_inner())
+        self.shared
+            .inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
     }
 
     fn mdns_mut(&self) -> MutexGuard<'_, Option<ServiceDaemon>> {
-        self.shared.mdns.lock().unwrap_or_else(|err| err.into_inner())
+        self.shared
+            .mdns
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
     }
 
     fn note(&self, line: impl AsRef<str>) {
@@ -2081,7 +2294,11 @@ impl Engine {
 }
 
 fn non_empty_str(value: Option<&Value>) -> Option<String> {
-    value.and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn mdns_instance(name: &str) -> String {
@@ -2092,36 +2309,59 @@ fn mdns_instance(name: &str) -> String {
         }
         out.push(ch);
     }
-    if out.is_empty() { "Mac".to_string() } else { out }
+    if out.is_empty() {
+        "Mac".to_string()
+    } else {
+        out
+    }
 }
 
 fn stamp() -> String {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    format!("{:02}:{:02}:{:02}Z", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!(
+        "{:02}:{:02}:{:02}Z",
+        (secs / 3600) % 24,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }
 
 fn unix_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn unix_millis() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 fn find_wallpaper(value: &Value) -> Option<(String, String)> {
     match value {
         Value::Object(map) => {
-            if let Some(raw) = map.get("wallpaper").and_then(Value::as_str) {
-                if raw.len() >= 32 {
-                    let md5 = map.get("md5").and_then(Value::as_str).unwrap_or("").to_string();
-                    return Some((raw.to_string(), md5));
-                }
+            if let Some(raw) = map.get("wallpaper").and_then(Value::as_str)
+                && raw.len() >= 32
+            {
+                let md5 = map
+                    .get("md5")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                return Some((raw.to_string(), md5));
             }
             map.values().find_map(find_wallpaper)
         }
         Value::Array(items) => items.iter().find_map(find_wallpaper),
         Value::String(text) if text.contains("wallpaper") => {
-            let parsed = serde_json::from_str::<Value>(&protocol::quote_wide_integers(text)).ok()?;
+            let parsed =
+                serde_json::from_str::<Value>(&protocol::quote_wide_integers(text)).ok()?;
             find_wallpaper(&parsed)
         }
         _ => None,
@@ -2134,7 +2374,11 @@ fn value_keys(value: &Value) -> String {
     };
     let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    if keys.is_empty() { "none".into() } else { keys.join(", ") }
+    if keys.is_empty() {
+        "none".into()
+    } else {
+        keys.join(", ")
+    }
 }
 
 fn wallpaper_data_url(raw: &str) -> Option<String> {
@@ -2166,13 +2410,23 @@ fn write_phone_file(name: &str, bytes: &[u8]) -> Result<String> {
     let clean = std::path::Path::new(name)
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty() && !name.contains('/') && !name.contains('\\') && *name != "." && *name != "..")
+        .filter(|name| {
+            !name.is_empty()
+                && !name.contains('/')
+                && !name.contains('\\')
+                && *name != "."
+                && *name != ".."
+        })
         .ok_or_else(|| anyhow::anyhow!("That file name cannot be saved."))?;
     let dir = receive_root();
-    std::fs::create_dir_all(&dir).map_err(|_| anyhow::anyhow!("The downloads folder is not available."))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|_| anyhow::anyhow!("The downloads folder is not available."))?;
     let mut path = dir.join(clean);
     if path.exists() {
-        let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("file");
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("file");
         let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
         let suffix = unix_millis();
         let named = if ext.is_empty() {
@@ -2187,7 +2441,9 @@ fn write_phone_file(name: &str, bytes: &[u8]) -> Result<String> {
 }
 
 fn receive_root() -> PathBuf {
-    dirs::download_dir().unwrap_or_else(std::env::temp_dir).join("Smart Connect")
+    dirs::download_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Smart Connect")
 }
 
 fn unpack_files(zip: &std::path::Path, dir: &std::path::Path) -> Vec<FileView> {
@@ -2195,7 +2451,9 @@ fn unpack_files(zip: &std::path::Path, dir: &std::path::Path) -> Vec<FileView> {
         return Vec::new();
     }
     let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return files };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return files;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') || name.contains('/') || name.contains('\\') {
@@ -2205,7 +2463,10 @@ fn unpack_files(zip: &std::path::Path, dir: &std::path::Path) -> Vec<FileView> {
         if !meta.is_file() {
             continue;
         }
-        files.push(FileView { name, path: entry.path().to_string_lossy().to_string() });
+        files.push(FileView {
+            name,
+            path: entry.path().to_string_lossy().to_string(),
+        });
     }
     files
 }
@@ -2220,7 +2481,9 @@ fn unpack_icons(zip: &std::path::Path) -> HashMap<String, String> {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let Ok(bytes) = std::fs::read(entry.path()) else { continue };
+            let Ok(bytes) = std::fs::read(entry.path()) else {
+                continue;
+            };
             if let Some((name, url)) = desk::decode_icon(&name, &bytes) {
                 icons.insert(name, url);
             }
@@ -2232,7 +2495,14 @@ fn unpack_icons(zip: &std::path::Path) -> HashMap<String, String> {
 
 fn media_ipv4(addr: SocketAddr) -> Option<IpAddr> {
     match addr.ip() {
-        IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() && !ip.is_multicast() => Some(IpAddr::V4(ip)),
+        IpAddr::V4(ip)
+            if !ip.is_loopback()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+                && !ip.is_multicast() =>
+        {
+            Some(IpAddr::V4(ip))
+        }
         _ => None,
     }
 }

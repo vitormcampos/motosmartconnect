@@ -205,7 +205,7 @@ async fn read_directory(rpc: &mut Rpc, dir: &[u8]) -> Result<Vec<PhoneEntry>> {
             let name = reader.string().context("a folder entry had no name")?;
             cookie = reader.u64().context("a folder entry was short")?;
             let (kind, size) = reader.attr().context("a folder entry was short")?;
-            let _handle = reader.post_handle().context("a folder entry was short")?;
+            reader.post_handle().context("a folder entry was short")?;
             if name != "." && name != ".." && !name.contains('/') && !name.contains('\0') {
                 entries.push(PhoneEntry { name, directory: kind == 2, size });
             }
@@ -352,7 +352,7 @@ impl XdrWriter {
         self.u32(bytes.len() as u32);
         self.buf.extend_from_slice(bytes);
         let pad = (4 - (bytes.len() % 4)) % 4;
-        self.buf.extend(std::iter::repeat(0).take(pad));
+        self.buf.extend(std::iter::repeat_n(0, pad));
     }
 
     fn string(&mut self, text: &str) {

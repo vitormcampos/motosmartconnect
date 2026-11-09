@@ -7,10 +7,10 @@
 
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use rand::RngCore;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -99,7 +99,15 @@ pub fn fingerprint(der: &[u8]) -> (String, String) {
     (b64(&digest), hex::encode(digest))
 }
 
-pub fn qr_payload(nonce_b64: &str, real_b64: &str, name: &str, token: &str, fp_b64: &str, port: u16, ips: &[String]) -> String {
+pub fn qr_payload(
+    nonce_b64: &str,
+    real_b64: &str,
+    name: &str,
+    token: &str,
+    fp_b64: &str,
+    port: u16,
+    ips: &[String],
+) -> String {
     let wifi: Vec<&str> = ips.iter().map(String::as_str).collect();
     let device = json!({
         "deviceId": nonce_b64,
@@ -139,7 +147,10 @@ pub fn qr_payload(nonce_b64: &str, real_b64: &str, name: &str, token: &str, fp_b
 
 pub fn qr_svg(payload: &str) -> Result<String, String> {
     let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|err| err.to_string())?;
-    Ok(code.render::<qrcode::render::svg::Color>().min_dimensions(280, 280).build())
+    Ok(code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(280, 280)
+        .build())
 }
 
 fn service_versions() -> Value {
@@ -168,7 +179,14 @@ fn envelope(nonce_b64: &str, service: i64, msg_id: u64, data: Value) -> String {
     .to_string()
 }
 
-pub fn verify_message(nonce_b64: &str, real_b64: &str, name: &str, sn: &str, key: &str, msg_id: u64) -> String {
+pub fn verify_message(
+    nonce_b64: &str,
+    real_b64: &str,
+    name: &str,
+    sn: &str,
+    key: &str,
+    msg_id: u64,
+) -> String {
     let device = json!({
         "deviceId": nonce_b64,
         "realDeviceId": real_b64,
@@ -206,7 +224,14 @@ pub fn verify_message(nonce_b64: &str, real_b64: &str, name: &str, sn: &str, key
 }
 
 /// `device.deviceId` is the stable id. The phone keys the pair on that field.
-pub fn exchange_message(nonce_b64: &str, real_b64: &str, name: &str, sn: &str, key: &str, msg_id: u64) -> String {
+pub fn exchange_message(
+    nonce_b64: &str,
+    real_b64: &str,
+    name: &str,
+    sn: &str,
+    key: &str,
+    msg_id: u64,
+) -> String {
     envelope(
         nonce_b64,
         0,
@@ -252,7 +277,18 @@ pub fn delete_message(nonce_b64: &str, real_b64: &str, msg_id: u64) -> String {
 /// Bit 8 on service 26 means a cross-control session is active. The phone replaces the whole map,
 /// so 15 and 22 stay in the same message. Bit 16 is never set.
 pub fn status_message(nonce_b64: &str, name: &str, msg_id: u64) -> String {
-    status_message_for(nonce_b64, name, msg_id, false, crate::power::HostPower { battery: 100, charging: false, plugged: false })
+    status_message_for(
+        nonce_b64,
+        name,
+        msg_id,
+        false,
+        crate::platform::HostPower {
+            battery: 100,
+            charging: false,
+            plugged: false,
+            battery_available: false,
+        },
+    )
 }
 
 /// Ask the phone to share its wallpaper. Windows sends this when `wallpaperState` is not 7.
@@ -261,7 +297,13 @@ pub fn wallpaper_request(nonce_b64: &str, msg_id: u64) -> String {
     envelope(nonce_b64, 25, msg_id, json!({ "ver": "1", "cmd": 4 }))
 }
 
-pub fn status_message_for(nonce_b64: &str, name: &str, msg_id: u64, cross_active: bool, power: crate::power::HostPower) -> String {
+pub fn status_message_for(
+    nonce_b64: &str,
+    name: &str,
+    msg_id: u64,
+    cross_active: bool,
+    power: crate::platform::HostPower,
+) -> String {
     let cross = if cross_active { 1 | 8 } else { 1 };
     envelope(
         nonce_b64,
@@ -322,8 +364,13 @@ pub fn quote_wide_integers(input: &str) -> String {
                 index += 1;
             }
             let digits = index - digits_at;
-            let prev_ok = start == 0 || matches!(bytes[start - 1], b':' | b'[' | b',' | b' ' | b'\n' | b'\t');
-            let next_ok = index == bytes.len() || matches!(bytes[index], b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t');
+            let prev_ok =
+                start == 0 || matches!(bytes[start - 1], b':' | b'[' | b',' | b' ' | b'\n' | b'\t');
+            let next_ok = index == bytes.len()
+                || matches!(
+                    bytes[index],
+                    b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t'
+                );
             if prev_ok && next_ok && digits >= 16 {
                 out.push(b'"');
                 out.extend_from_slice(&bytes[start..index]);
@@ -369,7 +416,15 @@ pub fn unquote_session_ids(input: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| input.to_string())
 }
 
-pub fn invite_json(nonce_b64: &str, real_b64: &str, name: &str, fp_b64: &str, token: &str, port: u16, ips: &[String]) -> String {
+pub fn invite_json(
+    nonce_b64: &str,
+    real_b64: &str,
+    name: &str,
+    fp_b64: &str,
+    token: &str,
+    port: u16,
+    ips: &[String],
+) -> String {
     let wifi: Vec<&str> = ips.iter().map(String::as_str).collect();
     json!({
         "ver": 2,
@@ -406,11 +461,20 @@ pub fn json_cmd(value: &Value) -> Option<i64> {
 }
 
 /// Seal a discovery frame. Layout: nonce id (16) | type 1 | iv (12) | ciphertext | tag (16).
-pub fn seal_frame(key_b64: &str, sender_nonce: &[u8; 16], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn seal_frame(
+    key_b64: &str,
+    sender_nonce: &[u8; 16],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
     seal_frame_with_iv(key_b64, sender_nonce, &random_bytes::<12>(), plaintext)
 }
 
-pub fn seal_frame_with_iv(key_b64: &str, sender_nonce: &[u8; 16], iv: &[u8; 12], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn seal_frame_with_iv(
+    key_b64: &str,
+    sender_nonce: &[u8; 16],
+    iv: &[u8; 12],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
     let key = b64_decode(key_b64).ok_or("pair key is not base64")?;
     if key.len() != 32 {
         return Err("pair key must be 32 bytes".into());
@@ -423,7 +487,10 @@ pub fn seal_frame_with_iv(key_b64: &str, sender_nonce: &[u8; 16], iv: &[u8; 12],
     let encrypted = cipher
         .encrypt(
             Nonce::from_slice(iv),
-            Payload { msg: plaintext, aad: &frame[..17] },
+            Payload {
+                msg: plaintext,
+                aad: &frame[..17],
+            },
         )
         .map_err(|err| err.to_string())?;
     frame.extend_from_slice(&encrypted);
@@ -453,7 +520,13 @@ pub fn open_frame(key_b64: &str, frame: &[u8]) -> Result<OpenedFrame, String> {
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|err| err.to_string())?;
     let iv = &frame[17..29];
     let body = &frame[29..];
-    match cipher.decrypt(Nonce::from_slice(iv), Payload { msg: body, aad: &frame[..17] }) {
+    match cipher.decrypt(
+        Nonce::from_slice(iv),
+        Payload {
+            msg: body,
+            aad: &frame[..17],
+        },
+    ) {
         Ok(plain) => Ok(OpenedFrame::Payload(plain)),
         Err(_) => Ok(OpenedFrame::CannotDecrypt),
     }
@@ -494,7 +567,15 @@ mod tests {
         let token = mint_token();
         assert!(!token.contains(['=', '+', '/']));
         assert!(token.len() >= 42);
-        let qr = qr_payload("nonce", "real", "Desk", &token, "fp==", 52020, &["192.168.1.20".into()]);
+        let qr = qr_payload(
+            "nonce",
+            "real",
+            "Desk",
+            &token,
+            "fp==",
+            52020,
+            &["192.168.1.20".into()],
+        );
         assert!(qr.starts_with("motorolardpconnection{"));
         let json: Value = serde_json::from_str(qr.trim_start_matches(QR_PREFIX)).unwrap();
         assert_eq!(json["version"], "3.0.0");
@@ -514,7 +595,10 @@ mod tests {
         assert_eq!(json["data"]["cmd"], 1);
         assert_eq!(json["data"]["device"]["deviceId"], "real-id");
         assert_eq!(json["data"]["device"]["verName"], APP_VER);
-        let verify: Value = serde_json::from_str(&verify_message("nonce", "real-id", "Desk", "sn-1", "key", 1)).unwrap();
+        let verify: Value = serde_json::from_str(&verify_message(
+            "nonce", "real-id", "Desk", "sn-1", "key", 1,
+        ))
+        .unwrap();
         assert_eq!(verify["data"]["token"], "OK");
         assert_eq!(verify["data"]["device"]["deviceId"], "nonce");
         assert_eq!(verify["data"]["device"]["realDeviceId"], "real-id");
@@ -529,7 +613,12 @@ mod tests {
             "Desk",
             2,
             true,
-            crate::power::HostPower { battery: 80, charging: false, plugged: true },
+            crate::platform::HostPower {
+                battery: 80,
+                charging: false,
+                plugged: true,
+                battery_available: true,
+            },
         ))
         .unwrap();
         assert_eq!(live["data"]["battery"], 80);
@@ -551,11 +640,16 @@ mod tests {
         let value: Value = serde_json::from_str(&quoted).unwrap();
         assert_eq!(value["sessionId"], "1700000000000000001");
         assert_eq!(value["nested"]["n"], 12);
-        let sent = control_message("nonce", 15, 4, &json!({
-            "cmd": 4,
-            "sessionId": "1700000000000000001",
-            "webRTCData": "{\"type\":\"answer\",\"sdp\":\"v=0\"}"
-        }));
+        let sent = control_message(
+            "nonce",
+            15,
+            4,
+            &json!({
+                "cmd": 4,
+                "sessionId": "1700000000000000001",
+                "webRTCData": "{\"type\":\"answer\",\"sdp\":\"v=0\"}"
+            }),
+        );
         assert!(sent.contains("\"sessionId\":1700000000000000001"));
         assert!(sent.contains("\"type\":\"answer\"") || sent.contains("answer"));
         assert!(!sent.contains("\"sessionId\":\"1700000000000000001\""));

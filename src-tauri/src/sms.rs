@@ -345,7 +345,7 @@ impl Sms {
                     .into_iter()
                     .chain(contact_numbers(item))
             })
-            .chain(text_field(data, &["phoneNumber"]).into_iter())
+            .chain(text_field(data, &["phoneNumber"]))
         {
             let key = thread_key(&number);
             if !key.is_empty() && !self.own.contains(&key) {
@@ -437,8 +437,8 @@ impl Sms {
         let local = request.and_then(|request| {
             self.items.iter().find(|(_, item)| item.request_id == request && item.id.starts_with('p')).map(|(id, _)| id.clone())
         });
-        if let Some(local) = local {
-            if let Some(mut item) = self.items.remove(&local) {
+        if let Some(local) = local
+            && let Some(mut item) = self.items.remove(&local) {
                 self.order.retain(|id| id != &local);
                 item.pending = false;
                 item.failed = failed;
@@ -450,7 +450,6 @@ impl Sms {
                 self.order.push_back(id);
                 changed = true;
             }
-        }
         let mut outcome = Outcome { changed, ..Outcome::default() };
         if failed {
             outcome.notes.push("The phone could not send that text.".into());
@@ -555,8 +554,8 @@ impl Sms {
             return false;
         }
         let request_id = bean.get("requestId").and_then(Value::as_i64).unwrap_or(0);
-        if request_id > 0 {
-            if let Some(local) = self
+        if request_id > 0
+            && let Some(local) = self
                 .items
                 .iter()
                 .find(|(_, item)| item.request_id == request_id && item.id.starts_with('p'))
@@ -565,7 +564,6 @@ impl Sms {
                 self.items.remove(&local);
                 self.order.retain(|existing| existing != &local);
             }
-        }
         let outgoing = bean.get("messageType").and_then(Value::as_i64).unwrap_or(1) == 2;
         let from = first_address(bean.get("fromAddress"));
         let to = first_address(bean.get("toAddress"));
@@ -649,7 +647,7 @@ fn clean_address(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     let digits = trimmed.chars().filter(|ch| ch.is_ascii_digit()).count();
     let ok = trimmed.chars().all(|ch| ch.is_ascii_digit() || matches!(ch, '+' | '-' | '(' | ')' | ' '));
-    if !ok || digits < 3 || digits > 15 || trimmed.chars().count() > 32 {
+    if !ok || !(3..=15).contains(&digits) || trimmed.chars().count() > 32 {
         return Err("Enter a phone number.".into());
     }
     let mut out = String::new();
@@ -776,11 +774,10 @@ fn delete_ids(data: &Value) -> Vec<String> {
                     Value::String(text) => ids.push(text.clone()),
                     Value::Number(number) => ids.push(number.to_string()),
                     Value::Object(_) => {
-                        if let Some(id) = item.get("msgId").map(value_id) {
-                            if !id.is_empty() {
+                        if let Some(id) = item.get("msgId").map(value_id)
+                            && !id.is_empty() {
                                 ids.push(id);
                             }
-                        }
                     }
                     _ => {}
                 }

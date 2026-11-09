@@ -92,8 +92,8 @@ pub fn local_ipv4s() -> Vec<String> {
     let mut extra = Vec::new();
     if let Ok(interfaces) = local_ip_address::list_afinet_netifas() {
         for (name, addr) in interfaces {
-            if let IpAddr::V4(ipv4) = addr {
-                if usable(ipv4) {
+            if let IpAddr::V4(ipv4) = addr
+                && usable(ipv4) {
                     let text = ipv4.to_string();
                     // Bridges and virtual adapters are not the network the phone is on.
                     if name.starts_with("en") {
@@ -104,7 +104,6 @@ pub fn local_ipv4s() -> Vec<String> {
                         extra.push(text);
                     }
                 }
-            }
         }
     }
     if found.is_empty() {

@@ -1,17 +1,24 @@
+#[cfg(target_os = "macos")]
 mod app_bundle;
+#[cfg(target_os = "macos")]
 mod banner;
+#[cfg(target_os = "macos")]
 mod cam_publish;
 mod desk;
 mod engine;
+#[cfg(target_os = "macos")]
 mod power;
+mod platform;
 mod sms;
 mod fex;
 mod mirror;
 mod nfs;
 mod net;
 mod protocol;
+#[cfg(target_os = "macos")]
 mod wake;
 mod store;
+#[cfg(target_os = "macos")]
 mod tray;
 
 use engine::{Engine, Snapshot};
@@ -272,7 +279,7 @@ fn reveal_file(state: State<'_, Engine>, path: String) -> Result<(), String> {
 
 /// Dev launches step into an app bundle so banners belong to Smart Connect.
 pub fn adopt_bundle() {
-    app_bundle::adopt_bundle();
+    platform::prepare_launch();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -284,8 +291,7 @@ pub fn run() {
                 Box::new(std::io::Error::other(format!("{err:#}")))
             })?;
             app.manage(engine.clone());
-            banner::bind_app(app.handle().clone());
-            banner::install();
+            #[cfg(target_os = "macos")]
             tray::install(app)?;
             tauri::async_runtime::spawn(async move {
                 engine.boot().await;

@@ -802,11 +802,10 @@ fn video_mid(sdp: &str) -> String {
     for line in sdp.split(['\r', '\n']) {
         if let Some(rest) = line.strip_prefix("m=") {
             video = rest.starts_with("video ");
-        } else if video {
-            if let Some(mid) = line.strip_prefix("a=mid:") {
+        } else if video
+            && let Some(mid) = line.strip_prefix("a=mid:") {
                 return mid.trim().to_string();
             }
-        }
     }
     "0".to_string()
 }
@@ -845,13 +844,11 @@ fn without_rtx(sdp: &str) -> String {
                 rtx.insert(pt.to_string());
             }
         }
-        if let Some(rest) = line.strip_prefix("a=fmtp:") {
-            if rest.to_ascii_lowercase().contains("apt=") {
-                if let Some(pt) = rest.split_whitespace().next() {
+        if let Some(rest) = line.strip_prefix("a=fmtp:")
+            && rest.to_ascii_lowercase().contains("apt=")
+                && let Some(pt) = rest.split_whitespace().next() {
                     rtx.insert(pt.to_string());
                 }
-            }
-        }
     }
     let mut out = Vec::with_capacity(lines.len());
     for line in &lines {
@@ -869,11 +866,10 @@ fn without_rtx(sdp: &str) -> String {
                 continue;
             }
         }
-        if let Some(pt) = attribute_pt(line) {
-            if rtx.contains(pt) {
+        if let Some(pt) = attribute_pt(line)
+            && rtx.contains(pt) {
                 continue;
             }
-        }
         out.push(line.clone());
     }
     let mut text = out.join("\r\n");
